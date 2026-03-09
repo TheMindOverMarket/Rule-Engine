@@ -202,6 +202,17 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
     try:
         playbook, context_skeleton = parser.parse(prompt_text)
         skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
+        
+        # [NEW] Persist the parsed rules/conditions to backend DB
+        from populate_tables import populate_playbook_tables
+        # Fire-and-forget or await depending on whether we want to block execution.
+        # Since this is an async orchestration flow, awaiting is safer to ensure db state 
+        # is consistent before trading starts.
+        try:
+            await populate_playbook_tables(user_id, playbook_id, playbook)
+        except Exception as pop_err:
+            print(f"[ENGINE WARNING] DB Population failed: {pop_err}")
+            
     except Exception as e:
         print(f"[ENGINE ERROR] Failed to parse playbook: {e}")
         return
