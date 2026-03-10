@@ -80,13 +80,29 @@ async def populate_playbook_tables(user_id: str, playbook_id: str, playbook: Pla
                     # e.g., comparison primitive has field/metric, op, value.
                     
                     params = ext.params
-                    # 'field' or 'metric' contains what we are checking against
-                    metric = params.get("field") or params.get("metric", "Unknown_Metric")
+                    
+                    # Look at all positions where a metric name could be based on the primitive type
+                    metric = (
+                        params.get("left") or           # comparison_evaluator
+                        params.get("field") or          # accumulation_evaluator, set_membership_evaluator, account_comparison_evaluator
+                        params.get("metric") or         # rate_limit_evaluator
+                        params.get("pattern") or        # sequence_evaluator
+                        ("temporal_window" if "start_time" in params or "cooldown_end" in params else None) or # temporal_gate_evaluator
+                        "Unknown_Metric"                # fallback
+                    )
+                    
                     if isinstance(metric, list) and len(metric) > 0:
-                        metric = metric[0] # Take first field if it's a list
+                        metric = str(metric[0])
+                    elif isinstance(metric, list):
+                        metric = "Unknown_Metric_List"
+                    else:
+                        metric = str(metric)
 
                     comparator = params.get("op", "==")
-                    value = str(params.get("value", ""))
+                    
+                    # Also look at all positions where a value could be
+                    raw_val = params.get("right") or params.get("value") or params.get("threshold") or params.get("max") or ""
+                    value = str(raw_val)
                     
                     try:
                         cond_id = await create_condition(session, rule_id, metric, comparator, value)
