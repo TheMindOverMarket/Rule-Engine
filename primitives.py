@@ -78,15 +78,11 @@ def comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> boo
             try:
                 return float(val)
             except ValueError:
-                pass
-        return val
+                return 0.0 # If it's a completely unresolved variable, default to 0.0
+        return 0.0
 
     left = safe_to_float(left)
     right = safe_to_float(right)
-
-    if type(left) != type(right):
-        print(f" [EVALUATOR WARNING] Type mismatch: {type(left)} vs {type(right)} -> {left} {op} {right}")
-        return False
 
     if op == '>':
         return left > right
