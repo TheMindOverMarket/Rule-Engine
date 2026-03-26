@@ -198,19 +198,17 @@ async def run_market_engine(
     await client.listen(market_handler)
 
 
-async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[Any]):
+async def compile_playbook(playbook_id: str):
     """
-    Orchestration flow:
+    Compilation flow:
     1. Fetch rule from Supabase
     2. Parse it with LLM
-    3. Patch derived context back to Supabase
-    4. Notify frontend to start streaming
-    5. Spin up the trading engine loops
+    3. Persist tables (Rules, Conditions, Edges)
+    4. Patch derived context and compiled JSON back to Supabase
     """
-    print(f"\n[ENGINE] Starting orchestration for User: {user_id}, Playbook: {playbook_id}")
+    print(f"\n[ENGINE] Starting compilation for Playbook: {playbook_id}")
 
     # 1. Fetch raw user prompt from Supabase
-    # The user provided: GET https://tmom-app-backend.onrender.com/playbooks/{playbook_id}
     fetch_url = f"https://tmom-app-backend.onrender.com/playbooks/{playbook_id}"
     prompt_text = ""
     
@@ -229,7 +227,7 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
             return
             
     if not prompt_text:
-        print("[ENGINE ERROR] Prompt text is empty. Cannot start engine.")
+        print("[ENGINE ERROR] Prompt text is empty. Cannot compile engine.")
         return
 
     # 2. Parse the rule using the LLM
@@ -241,13 +239,10 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
         playbook, context_skeleton = parser.parse(prompt_text)
         skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
         
-        # [NEW] Persist the parsed rules/conditions to backend DB
+        # 3. Persist the parsed rules/conditions to backend DB
         from populate_tables import populate_playbook_tables
-        # Fire-and-forget or await depending on whether we want to block execution.
-        # Since this is an async orchestration flow, awaiting is safer to ensure db state 
-        # is consistent before trading starts.
         try:
-            await populate_playbook_tables(user_id, playbook_id, playbook)
+            await populate_playbook_tables(playbook_id, playbook)
         except Exception as pop_err:
             print(f"[ENGINE WARNING] DB Population failed: {pop_err}")
             
@@ -255,24 +250,86 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
         print(f"[ENGINE ERROR] Failed to parse playbook: {e}")
         return
 
-    # 3. Patch the Context Skeleton back to Supabase
+    # 4. Patch the Context Skeleton & Compiled Rules back to Supabase
+    compiled_rules = []
+    for rule in playbook.rules:
+        compiled_rules.append({
+            "name": rule.name,
+            "id": str(rule.id) if rule.id else None,
+            "category": rule.category.name,
+            "extensions": [
+                {"id": ext.id, "primitive": ext.primitive_name, "params": ext.params}
+                for ext in rule.extensions.values()
+            ],
+            "conditions": rule.conditions
+        })
+        
+    patch_data = {"context": skeleton_dict}
+    patch_data["context"]["compiled_rules"] = compiled_rules
+
     patch_url = f"https://tmom-app-backend.onrender.com/playbooks/{playbook_id}"
     async with aiohttp.ClientSession() as session:
         try:
             async with session.patch(
                 patch_url,
-                json={"context": skeleton_dict},
+                json=patch_data,
                 headers={"accept": "application/json"}
             ) as patch_resp:
                 if patch_resp.status in (200, 201, 204):
-                    print("[ENGINE] Successfully patched Context Skeleton to database.")
+                    print("[ENGINE] Successfully patched Context Skeleton and Compiled Rules to database.")
                 else:
                     err_text = await patch_resp.text()
                     print(f"[ENGINE WARNING] Failed to patch context. Status: {patch_resp.status}, Response: {err_text}")
         except Exception as e:
             print(f"[ENGINE WARNING] Could not patch Supabase: {e}")
 
-    # 4. Notify frontend's setup stream endpoint
+
+async def execute_playbook(playbook_id: str, clients_set: Set[Any]):
+    """
+    Execution flow:
+    1. Fetch compiled Context Skeleton & Rules from Supabase
+    2. Reconstruct Playbook object in memory
+    3. Notify frontend to start streaming
+    4. Spin up the trading engine loops
+    """
+    print(f"\n[ENGINE] Starting execution for Playbook: {playbook_id}")
+
+    fetch_url = f"https://tmom-app-backend.onrender.com/playbooks/{playbook_id}"
+    user_id = None
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    user_id = data.get("user_id")
+                else:
+                    print(f"[ENGINE ERROR] Failed to fetch playbook to execute. Status: {resp.status}")
+                    return None
+        except Exception as e:
+            print(f"[ENGINE ERROR] Could not reach Supabase for execute: {e}")
+            return None
+
+    context_data = data.get("context", {})
+    if not context_data:
+        print("[ENGINE ERROR] Playbook missing compiled context. Please compile first.")
+        return None
+
+    compiled_rules = context_data.get("compiled_rules", [])
+    
+    # 2. Reconstruct Playbook
+    from engine import Playbook, RuleBlock
+    playbook = Playbook()
+    for rule_data in compiled_rules:
+        cat_enum = RuleCategory[rule_data["category"]]
+        rule_block = RuleBlock(category=cat_enum, skeleton=rule_data)
+        rule_block.id = rule_data.get("id")
+        playbook.add_rule(rule_block)
+
+    # Need to remove our injected 'compiled_rules' before validating ContextSkeletonSchema
+    safe_context_data = {k: v for k, v in context_data.items() if k != "compiled_rules"}
+    context_skeleton = ContextSkeletonSchema(**safe_context_data)
+
+    # 3. Notify frontend's setup stream endpoint
     notify_url = "https://tmom-app-backend.onrender.com/start_streams_creation"
     async with aiohttp.ClientSession() as session:
         try:
@@ -288,8 +345,7 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
         except Exception as e:
             print(f"[ENGINE WARNING] Could not notify frontend setup stream: {e}")
 
-    # 5. Spin up trading engine loops
-    # Hardware/Provider Setup
+    # 4. Spin up trading engine loops
     alpaca_provider = AlpacaAccountProvider(
         api_key=os.getenv("API_KEY"),
         api_secret=os.getenv("SECRET_KEY"),

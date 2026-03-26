@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv(".env")
 
 # Import execution engine logic
-from execution_engine import process_new_playbook, connected_clients
+from execution_engine import compile_playbook, execute_playbook, connected_clients
 
 # Initialize FastAPI app
 app = FastAPI(title="Rule Engine Orchestrator")
@@ -24,24 +24,44 @@ async def handle_health():
     return {"status": "healthy", "service": "rule-engine-orchestrator"}
 
 
-async def run_in_background(user_id: str, playbook_id: str):
-    """Wrapper to run the playbook flow and capture the background tasks."""
+async def run_execute_in_background(playbook_id: str):
+    """Wrapper to run the playbook execute flow and capture the background tasks."""
     global active_trading_tasks
-    tasks = await process_new_playbook(user_id, playbook_id, connected_clients)
+    tasks = await execute_playbook(playbook_id, connected_clients)
     if tasks:
         active_trading_tasks.extend(tasks)
 
 
-@app.get("/api/rules/trigger")
-async def trigger_playbook(user_id: str, playbook_id: str, background_tasks: BackgroundTasks):
+@app.post("/api/rules/compile")
+async def compile_rule(playbook_id: str, background_tasks: BackgroundTasks):
     """
-    GET /api/rules/trigger?user_id=123&playbook_id=abc
-    Triggered by the frontend when a user saves a new rule to the database.
+    POST /api/rules/compile?playbook_id=abc
+    Compiles the natural language prompt using the LLM and populates the database.
     """
-    if not user_id or not playbook_id:
-        return {"error": "Missing 'user_id' or 'playbook_id' in query parameters."}
+    if not playbook_id:
+        return {"error": "Missing 'playbook_id' in query parameters."}
 
-    print(f" \n[API] Received Trigger for User: {user_id} | Playbook: {playbook_id}")
+    print(f" \n[API] Received Compile for Playbook: {playbook_id}")
+
+    # Launch compilation in the background
+    background_tasks.add_task(compile_playbook, playbook_id)
+
+    return {
+        "status": "success",
+        "message": "Engine compile started. Compiling playbook via LLM."
+    }
+
+
+@app.post("/api/rules/execute")
+async def execute_rule(playbook_id: str, background_tasks: BackgroundTasks):
+    """
+    POST /api/rules/execute?playbook_id=abc
+    Starts executing the previously compiled rules using the live websocket streams.
+    """
+    if not playbook_id:
+        return {"error": "Missing 'playbook_id' in query parameters."}
+
+    print(f" \n[API] Received Execute for Playbook: {playbook_id}")
 
     # Cancel any existing market engine tasks so we don't have conflicting rules trading
     global active_trading_tasks
@@ -51,26 +71,25 @@ async def trigger_playbook(user_id: str, playbook_id: str, background_tasks: Bac
             task.cancel()
         active_trading_tasks.clear()
 
-    # Launch the new playbook execution flow in the background
-    background_tasks.add_task(run_in_background, user_id, playbook_id)
+    # Launch the execution flow in the background
+    background_tasks.add_task(run_execute_in_background, playbook_id)
 
-    # Immediately respond to frontend so they aren't blocked waiting for LLM parsing
     return {
         "status": "success",
-        "message": "Engine triggered. Fetching and applying playbook in the background."
+        "message": "Engine execute started. Running playbook against live streams."
     }
 
 
 @app.get("/api/rules/stop")
-async def stop_playbook(user_id: str, playbook_id: str):
+async def stop_playbook(playbook_id: str):
     """
-    GET /api/rules/stop?user_id=123&playbook_id=abc
+    GET /api/rules/stop?playbook_id=abc
     Triggered by the frontend to stop active evaluating strategies.
     """
-    if not user_id or not playbook_id:
-        return {"error": "Missing 'user_id' or 'playbook_id' in query parameters."}
+    if not playbook_id:
+        return {"error": "Missing 'playbook_id' in query parameters."}
 
-    print(f" \n[API] Received Stop for User: {user_id} | Playbook: {playbook_id}")
+    print(f" \n[API] Received Stop for Playbook: {playbook_id}")
 
     global active_trading_tasks
     if active_trading_tasks:

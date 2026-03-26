@@ -58,7 +58,7 @@ async def create_condition_edge(
         resp.raise_for_status()
         return await resp.json()
 
-async def populate_playbook_tables(user_id: str, playbook_id: str, playbook: Playbook):
+async def populate_playbook_tables(playbook_id: str, playbook: Playbook):
     """
     Takes a parsed Playbook and populates the backend database tables
     (rules, conditions, condition-edges).
