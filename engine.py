@@ -125,6 +125,7 @@ class RuleBlock:
     """
     def __init__(self, category: RuleCategory, skeleton: Dict[str, Any]):
         self.name = skeleton.get("name", "Unnamed Rule")
+        self.id = None  # Will be populated by populate_tables.py with DB ID
         self.category = category
         self.extensions: Dict[str, Extension] = {}
         self.conditions: Dict[str, Any] = skeleton.get("conditions", {})
@@ -234,9 +235,9 @@ class Playbook:
             if rule.category not in results:
                 results[rule.category] = []
             
-            # If the rule evaluates to True, record its name
+            # If the rule evaluates to True, record its ID if available, else its name
             if rule.evaluate(context):
-                results[rule.category].append(rule.name)
+                results[rule.category].append(rule.id or rule.name)
                 
         return results
 

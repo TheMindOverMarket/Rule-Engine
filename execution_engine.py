@@ -146,6 +146,12 @@ async def run_market_engine(
             entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
             rule_result = len(entry_triggers) > 0
 
+            # 4b. Map all rules in the playbook to their boolean trigger status
+            rule_evaluations = {}
+            for rule in playbook.rules:
+                rule_key = rule.id or rule.name
+                rule_evaluations[rule_key] = rule_key in playbook_results.get(rule.category, [])
+
             print(" [MARKET] -> Checking User Action")
             
             # 5. User Action & Deviation
@@ -160,6 +166,7 @@ async def run_market_engine(
                 "price": market_context.get("price"),
                 "rule_triggered": rule_result,
                 "triggered_entries": entry_triggers,
+                "rule_evaluations": rule_evaluations,  # Tell frontend state of ALL rules
                 "action": user_action_bool,
                 "deviation": deviation
             }

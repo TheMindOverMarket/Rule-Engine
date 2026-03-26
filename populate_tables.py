@@ -70,6 +70,7 @@ async def populate_playbook_tables(user_id: str, playbook_id: str, playbook: Pla
             try:
                 # 1. Create Rule
                 rule_id = await create_rule(session, playbook_id, rule.name)
+                rule.id = rule_id
                 print(f"  [+] Created Rule ID: {rule_id} for '{rule.name}'")
                 
                 # 2. Extract and Create Conditions
