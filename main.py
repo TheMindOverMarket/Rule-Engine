@@ -61,6 +61,30 @@ async def trigger_playbook(user_id: str, playbook_id: str, background_tasks: Bac
     }
 
 
+@app.get("/api/rules/stop")
+async def stop_playbook(user_id: str, playbook_id: str):
+    """
+    GET /api/rules/stop?user_id=123&playbook_id=abc
+    Triggered by the frontend to stop active evaluating strategies.
+    """
+    if not user_id or not playbook_id:
+        return {"error": "Missing 'user_id' or 'playbook_id' in query parameters."}
+
+    print(f" \n[API] Received Stop for User: {user_id} | Playbook: {playbook_id}")
+
+    global active_trading_tasks
+    if active_trading_tasks:
+        print(f" [API] Cancelling {len(active_trading_tasks)} active engine tasks...")
+        for task in active_trading_tasks:
+            task.cancel()
+        active_trading_tasks.clear()
+
+    return {
+        "status": "success",
+        "message": "Engine stopped. Active background tasks have been cancelled."
+    }
+
+
 @app.websocket("/ws/engine-output")
 async def websocket_handler(websocket: WebSocket):
     """
