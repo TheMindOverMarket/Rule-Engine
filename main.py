@@ -7,14 +7,36 @@ from dotenv import load_dotenv
 load_dotenv(".env")
 
 # Import execution engine logic
-from execution_engine import compile_playbook, execute_playbook, connected_clients
+from execution_engine import compile_playbook, execute_playbook, client_registry
 
 # Initialize FastAPI app
 app = FastAPI(title="Rule Engine Orchestrator")
 
-# Keep track of active background WebSocket tasks so we can cancel them
-# if the frontend triggers a new rule.
-active_trading_tasks = []
+# Keep track of active background tasks per playbook so start/stop only affect
+# the targeted live session instead of cancelling every playbook globally.
+active_trading_tasks = {}
+
+
+def _prune_finished_tasks(playbook_id: str) -> None:
+    tasks = active_trading_tasks.get(playbook_id, [])
+    remaining = [task for task in tasks if not task.done()]
+    if remaining:
+        active_trading_tasks[playbook_id] = remaining
+    else:
+        active_trading_tasks.pop(playbook_id, None)
+
+
+async def cancel_playbook_tasks(playbook_id: str) -> int:
+    tasks = active_trading_tasks.pop(playbook_id, [])
+    if not tasks:
+        return 0
+
+    print(f" [API] Cancelling {len(tasks)} active engine tasks for playbook {playbook_id}...")
+    for task in tasks:
+        task.cancel()
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+    return len(tasks)
 
 
 @app.get("/")
@@ -24,12 +46,13 @@ async def handle_health():
     return {"status": "healthy", "service": "rule-engine-orchestrator"}
 
 
-async def run_execute_in_background(playbook_id: str):
+async def run_execute_in_background(playbook_id: str, session_id: str | None = None, user_id: str | None = None):
     """Wrapper to run the playbook execute flow and capture the background tasks."""
-    global active_trading_tasks
-    tasks = await execute_playbook(playbook_id, connected_clients)
+    tasks = await execute_playbook(playbook_id, client_registry, session_id=session_id, user_id=user_id)
     if tasks:
-        active_trading_tasks.extend(tasks)
+        active_trading_tasks[playbook_id] = list(tasks)
+        for task in tasks:
+            task.add_done_callback(lambda _task, pb=playbook_id: _prune_finished_tasks(pb))
 
 
 @app.post("/api/rules/compile")
@@ -53,7 +76,12 @@ async def compile_rule(playbook_id: str, background_tasks: BackgroundTasks):
 
 
 @app.post("/api/rules/execute")
-async def execute_rule(playbook_id: str, background_tasks: BackgroundTasks):
+async def execute_rule(
+    playbook_id: str,
+    background_tasks: BackgroundTasks,
+    session_id: str | None = None,
+    user_id: str | None = None,
+):
     """
     POST /api/rules/execute?playbook_id=abc
     Starts executing the previously compiled rules using the live websocket streams.
@@ -63,20 +91,18 @@ async def execute_rule(playbook_id: str, background_tasks: BackgroundTasks):
 
     print(f" \n[API] Received Execute for Playbook: {playbook_id}")
 
-    # Cancel any existing market engine tasks so we don't have conflicting rules trading
-    global active_trading_tasks
-    if active_trading_tasks:
-        print(f" [API] Cancelling {len(active_trading_tasks)} previously active engine tasks...")
-        for task in active_trading_tasks:
-            task.cancel()
-        active_trading_tasks.clear()
+    cancelled_tasks = await cancel_playbook_tasks(playbook_id)
 
     # Launch the execution flow in the background
-    background_tasks.add_task(run_execute_in_background, playbook_id)
+    background_tasks.add_task(run_execute_in_background, playbook_id, session_id, user_id)
 
     return {
         "status": "success",
-        "message": "Engine execute started. Running playbook against live streams."
+        "message": "Engine execute started. Running playbook against live streams.",
+        "playbook_id": playbook_id,
+        "session_id": session_id,
+        "user_id": user_id,
+        "cancelled_tasks": cancelled_tasks,
     }
 
 
@@ -91,16 +117,13 @@ async def stop_playbook(playbook_id: str):
 
     print(f" \n[API] Received Stop for Playbook: {playbook_id}")
 
-    global active_trading_tasks
-    if active_trading_tasks:
-        print(f" [API] Cancelling {len(active_trading_tasks)} active engine tasks...")
-        for task in active_trading_tasks:
-            task.cancel()
-        active_trading_tasks.clear()
+    cancelled_tasks = await cancel_playbook_tasks(playbook_id)
 
     return {
         "status": "success",
-        "message": "Engine stopped. Active background tasks have been cancelled."
+        "message": "Engine stopped. Active background tasks have been cancelled.",
+        "playbook_id": playbook_id,
+        "cancelled_tasks": cancelled_tasks,
     }
 
 
@@ -111,9 +134,11 @@ async def websocket_handler(websocket: WebSocket):
     Local Websocket endpoint so the frontend (or local GUI) can connect to this engine
     and watch the evaluation logs stream in real-time.
     """
-    await websocket.accept()
+    user_id = websocket.query_params.get("user_id")
+    session_id = websocket.query_params.get("session_id")
+
     print(" [WEBSOCKET] Engine Result Viewer Connected")
-    connected_clients.add(websocket)
+    await client_registry.connect(websocket, user_id=user_id, session_id=session_id)
     
     try:
         while True:
@@ -125,8 +150,7 @@ async def websocket_handler(websocket: WebSocket):
     except Exception as e:
         print(f" [WEBSOCKET] Connection closed with exception {e}")
     finally:
-        if websocket in connected_clients:
-            connected_clients.remove(websocket)
+        await client_registry.disconnect(websocket, user_id=user_id, session_id=session_id)
 
 
 if __name__ == "__main__":

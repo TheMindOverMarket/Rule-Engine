@@ -1,9 +1,9 @@
 import aiohttp
-import urllib.parse
+import os
 from engine import Playbook, RuleBlock
 from typing import Dict, Any
 
-API_BASE_URL = "https://tmom-app-backend.onrender.com"
+API_BASE_URL = os.getenv("TMOM_BACKEND_BASE_URL", "https://tmom-app-backend.onrender.com").rstrip("/")
 
 async def create_rule(
     session: aiohttp.ClientSession,

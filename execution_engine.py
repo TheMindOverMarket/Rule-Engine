@@ -2,7 +2,9 @@ import os
 import json
 import asyncio
 import aiohttp
+from collections import defaultdict
 from typing import Any, Dict, Optional, Set
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dotenv import load_dotenv
 
 from broker.account_providers import AlpacaAccountProvider
@@ -44,9 +46,119 @@ register_primitives()
 # Load environment variables
 load_dotenv(".env")
 
-# Global set of connected clients for local WebSocket broadcasting
-# (We might need to pass this from main.py, or define it here if execution_engine manages the broadcast)
-connected_clients: Set[Any] = set()
+BACKEND_BASE_URL = os.getenv("TMOM_BACKEND_BASE_URL", "https://tmom-app-backend.onrender.com").rstrip("/")
+BACKEND_WS_BASE_URL = os.getenv("TMOM_BACKEND_WS_BASE_URL", "").rstrip("/")
+
+
+def _derive_ws_base_url(http_base_url: str) -> str:
+    if http_base_url.startswith("https://"):
+        return f"wss://{http_base_url[len('https://'):]}"
+    if http_base_url.startswith("http://"):
+        return f"ws://{http_base_url[len('http://'):]}"
+    return http_base_url
+
+
+if not BACKEND_WS_BASE_URL:
+    BACKEND_WS_BASE_URL = _derive_ws_base_url(BACKEND_BASE_URL)
+
+
+def build_backend_http_url(path: str) -> str:
+    return f"{BACKEND_BASE_URL}{path}"
+
+
+def build_backend_ws_url(path: str, **query_params: Optional[str]) -> str:
+    base_url = f"{BACKEND_WS_BASE_URL}{path}"
+    filtered_params = {key: value for key, value in query_params.items() if value}
+    if not filtered_params:
+        return base_url
+
+    split_url = urlsplit(base_url)
+    merged_params = dict(parse_qsl(split_url.query))
+    merged_params.update(filtered_params)
+    return urlunsplit(
+        (
+            split_url.scheme,
+            split_url.netloc,
+            split_url.path,
+            urlencode(merged_params),
+            split_url.fragment,
+        )
+    )
+
+
+async def patch_backend_playbook(playbook_id: str, payload: Dict[str, Any]) -> bool:
+    patch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.patch(
+                patch_url,
+                json=payload,
+                headers={"accept": "application/json"},
+            ) as patch_resp:
+                if patch_resp.status in (200, 201, 204):
+                    return True
+
+                err_text = await patch_resp.text()
+                print(f"[ENGINE WARNING] Failed to patch playbook. Status: {patch_resp.status}, Response: {err_text}")
+                return False
+        except Exception as exc:
+            print(f"[ENGINE WARNING] Could not patch playbook: {exc}")
+            return False
+
+
+class EngineOutputRegistry:
+    def __init__(self) -> None:
+        self._global_clients: Set[Any] = set()
+        self._user_clients: Dict[str, Set[Any]] = defaultdict(set)
+        self._session_clients: Dict[str, Set[Any]] = defaultdict(set)
+        self._lock = asyncio.Lock()
+
+    async def connect(self, websocket: Any, user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
+        await websocket.accept()
+
+        async with self._lock:
+            if session_id:
+                self._session_clients[session_id].add(websocket)
+            elif user_id:
+                self._user_clients[user_id].add(websocket)
+            else:
+                self._global_clients.add(websocket)
+
+    async def disconnect(self, websocket: Any, user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
+        async with self._lock:
+            if session_id and session_id in self._session_clients:
+                self._session_clients[session_id].discard(websocket)
+                if not self._session_clients[session_id]:
+                    del self._session_clients[session_id]
+            elif user_id and user_id in self._user_clients:
+                self._user_clients[user_id].discard(websocket)
+                if not self._user_clients[user_id]:
+                    del self._user_clients[user_id]
+            else:
+                self._global_clients.discard(websocket)
+
+    async def broadcast(self, payload: Dict[str, Any], user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
+        async with self._lock:
+            if session_id:
+                targets = list(self._session_clients.get(session_id, []))
+            elif user_id:
+                targets = list(self._user_clients.get(user_id, []))
+            else:
+                targets = list(self._global_clients)
+
+            for websocket in targets:
+                try:
+                    await websocket.send_json(payload)
+                except Exception:
+                    if session_id:
+                        self._session_clients[session_id].discard(websocket)
+                    elif user_id:
+                        self._user_clients[user_id].discard(websocket)
+                    else:
+                        self._global_clients.discard(websocket)
+
+
+client_registry = EngineOutputRegistry()
 
 # Mock State Manager
 class EngineState:
@@ -58,11 +170,37 @@ class EngineState:
         self.user_took_action = False
         return val
 
-state = EngineState()
-
 GLOBAL_ACCOUNT_FIELDS = ["equity", "buying_power", "cash", "daytrade_count", "open_positions"]
 
-async def user_activity_handler(msg: str):
+def _flatten_market_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    flattened: Dict[str, Any] = {}
+
+    for key, value in data.items():
+        if key in {"metrics", "indicator_values"}:
+            continue
+        flattened[key] = value
+
+    metrics = data.get("metrics", {})
+    if isinstance(metrics, dict):
+        for key, value in metrics.items():
+            flattened.setdefault(key, value)
+
+    indicator_values = data.get("indicator_values", {})
+    if isinstance(indicator_values, dict):
+        for timeframe, timeframe_metrics in indicator_values.items():
+            if not isinstance(timeframe_metrics, dict):
+                continue
+            for metric_name, metric_value in timeframe_metrics.items():
+                flattened_key = metric_name if timeframe == "1m" else f"{metric_name}_{timeframe}"
+                flattened.setdefault(flattened_key, metric_value)
+
+    if "current_time" not in flattened and "timestamp" in flattened:
+        flattened["current_time"] = flattened["timestamp"]
+
+    return flattened
+
+
+async def user_activity_handler(msg: str, state: EngineState):
     """
     Listens to the manual user-activity stream (e.g. click "Buy", "Sell", "Close").
     """
@@ -84,7 +222,11 @@ async def run_market_engine(
     playbook: Playbook,
     context_builder: ContextBuilder,
     context_skeleton: ContextSkeletonSchema,
-    clients_set: Set[Any]
+    output_registry: EngineOutputRegistry,
+    state: EngineState,
+    playbook_id: str,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ):
     print("\n--- FRONTEND CONTEXT REQUEST SKELETON ---")
     if hasattr(context_skeleton, "model_dump_json"):
@@ -109,23 +251,8 @@ async def run_market_engine(
 
             print(" [MARKET] -> Extracting Base Context")
             
-            # 1. Build Base Context from Market Data
-            market_context = {}
-            if "price" in data:
-                market_context["price"] = data["price"]
-            if "current_time" in data:
-                market_context["current_time"] = data["current_time"]
-            if "symbol" in data:
-                market_context["symbol"] = data["symbol"]
-            
-            print(" [MARKET] -> Extracting TA-Lib Metrics")
-            
-            # Retrieve injected TA-Lib metrics from the data stream and add to base context
-            if context_skeleton.ta_lib_metrics:
-                for metric in context_skeleton.ta_lib_metrics:
-                    key = f"{metric.name}_{metric.timeperiod}" if metric.timeperiod else metric.name
-                    if key in data:
-                        market_context[key] = data[key]
+            # 1. Build Base Context from the market payload, including nested metrics.
+            market_context = _flatten_market_payload(data)
 
             print(" [MARKET] -> Hydrating Full Context")
             
@@ -146,11 +273,19 @@ async def run_market_engine(
             entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
             rule_result = len(entry_triggers) > 0
 
+            triggered_entry_labels = [
+                rule.name
+                for rule in playbook.rules
+                if rule.category == RuleCategory.ENTRY and (rule.id or rule.name) in entry_triggers
+            ]
+            if not triggered_entry_labels and entry_triggers:
+                triggered_entry_labels = [str(trigger) for trigger in entry_triggers]
+
             # 4b. Map all rules in the playbook to their boolean trigger status
             rule_evaluations = {}
             for rule in playbook.rules:
-                rule_key = rule.id or rule.name
-                rule_evaluations[rule_key] = rule_key in playbook_results.get(rule.category, [])
+                result_keys = playbook_results.get(rule.category, [])
+                rule_evaluations[rule.name] = (rule.id or rule.name) in result_keys
 
             print(" [MARKET] -> Checking User Action")
             
@@ -161,19 +296,25 @@ async def run_market_engine(
             print(" [MARKET] -> Preparing Output Payload")
             
             # 6. Output Payload
+            rule_summary = ", ".join(triggered_entry_labels) if triggered_entry_labels else "No entry rule triggered"
             output_payload = {
-                "timestamp": market_context.get("current_time"),
+                "timestamp": market_context.get("current_time") or market_context.get("timestamp"),
                 "price": market_context.get("price"),
+                "playbook_id": playbook_id,
+                "session_id": session_id,
+                "user_id": user_id,
+                "rule": rule_summary,
                 "rule_triggered": rule_result,
-                "triggered_entries": entry_triggers,
-                "rule_evaluations": rule_evaluations,  # Tell frontend state of ALL rules
+                "triggered_entries": triggered_entry_labels,
+                "rule_evaluations": rule_evaluations,
                 "action": user_action_bool,
                 "deviation": deviation
             }
             
+            price_display = output_payload["price"] if output_payload["price"] is not None else "N/A"
             print(
                 f"TIME: {output_payload['timestamp']} | "
-                f"PRICE: {output_payload['price']:<8} | "
+                f"PRICE: {str(price_display):<8} | "
                 f"RULE: {str(rule_result):<5} | "
                 f"TRIGGERS: {entry_triggers} | "
                 f"ACTION: {str(user_action_bool):<5} | "
@@ -182,13 +323,7 @@ async def run_market_engine(
             
             print(" [MARKET] -> Broadcasting Payload")
             
-            # Broadcast to all connected WebSocket clients
-            if clients_set:
-                for ws in list(clients_set):
-                    try:
-                        await ws.send_json(output_payload)
-                    except Exception as send_err:
-                        print(f" [RESULT STREAM ERROR] {send_err}")
+            await output_registry.broadcast(output_payload, user_id=user_id, session_id=session_id)
                         
         except Exception as e:
             import traceback
@@ -209,7 +344,7 @@ async def compile_playbook(playbook_id: str):
     print(f"\n[ENGINE] Starting compilation for Playbook: {playbook_id}")
 
     # 1. Fetch raw user prompt from Supabase
-    fetch_url = f"https://tmom-app-backend.onrender.com/playbooks/{playbook_id}"
+    fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     prompt_text = ""
     
     async with aiohttp.ClientSession() as session:
@@ -228,6 +363,7 @@ async def compile_playbook(playbook_id: str):
             
     if not prompt_text:
         print("[ENGINE ERROR] Prompt text is empty. Cannot compile engine.")
+        await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
         return
 
     # 2. Parse the rule using the LLM
@@ -245,9 +381,12 @@ async def compile_playbook(playbook_id: str):
             await populate_playbook_tables(playbook_id, playbook)
         except Exception as pop_err:
             print(f"[ENGINE WARNING] DB Population failed: {pop_err}")
-            
+            await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
+            return
+
     except Exception as e:
         print(f"[ENGINE ERROR] Failed to parse playbook: {e}")
+        await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
         return
 
     # 4. Patch the Context Skeleton & Compiled Rules back to Supabase
@@ -267,41 +406,32 @@ async def compile_playbook(playbook_id: str):
     patch_data = {"context": skeleton_dict}
     patch_data["context"]["compiled_rules"] = compiled_rules
 
-    patch_url = f"https://tmom-app-backend.onrender.com/playbooks/{playbook_id}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.patch(
-                patch_url,
-                json=patch_data,
-                headers={"accept": "application/json"}
-            ) as patch_resp:
-                if patch_resp.status in (200, 201, 204):
-                    print("[ENGINE] Successfully patched Context Skeleton and Compiled Rules to database.")
-                else:
-                    err_text = await patch_resp.text()
-                    print(f"[ENGINE WARNING] Failed to patch context. Status: {patch_resp.status}, Response: {err_text}")
-        except Exception as e:
-            print(f"[ENGINE WARNING] Could not patch Supabase: {e}")
+    patch_data["generation_status"] = "COMPLETED"
+    if await patch_backend_playbook(playbook_id, patch_data):
+        print("[ENGINE] Successfully patched Context Skeleton and Compiled Rules to database.")
 
 
-async def execute_playbook(playbook_id: str, clients_set: Set[Any]):
+async def execute_playbook(
+    playbook_id: str,
+    output_registry: EngineOutputRegistry,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+):
     """
     Execution flow:
     1. Fetch compiled Context Skeleton & Rules from Supabase
     2. Reconstruct Playbook object in memory
-    3. Notify frontend to start streaming
-    4. Spin up the trading engine loops
+    3. Spin up the trading engine loops
     """
     print(f"\n[ENGINE] Starting execution for Playbook: {playbook_id}")
 
-    fetch_url = f"https://tmom-app-backend.onrender.com/playbooks/{playbook_id}"
-    user_id = None
+    fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    user_id = data.get("user_id")
+                    user_id = user_id or data.get("user_id")
                 else:
                     print(f"[ENGINE ERROR] Failed to fetch playbook to execute. Status: {resp.status}")
                     return None
@@ -329,23 +459,7 @@ async def execute_playbook(playbook_id: str, clients_set: Set[Any]):
     safe_context_data = {k: v for k, v in context_data.items() if k != "compiled_rules"}
     context_skeleton = ContextSkeletonSchema(**safe_context_data)
 
-    # 3. Notify frontend's setup stream endpoint
-    notify_url = "https://tmom-app-backend.onrender.com/start_streams_creation"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(
-                notify_url,
-                json={"user_id": user_id, "playbook_id": playbook_id},
-                headers={
-                    "accept": "application/json",
-                    "Content-Type": "application/json"
-                }
-            ) as notify_resp:
-                print(f"[ENGINE] Notified frontend setup stream. Status: {notify_resp.status}")
-        except Exception as e:
-            print(f"[ENGINE WARNING] Could not notify frontend setup stream: {e}")
-
-    # 4. Spin up trading engine loops
+    # 3. Spin up trading engine loops
     alpaca_provider = AlpacaAccountProvider(
         api_key=os.getenv("API_KEY"),
         api_secret=os.getenv("SECRET_KEY"),
@@ -358,19 +472,27 @@ async def execute_playbook(playbook_id: str, clients_set: Set[Any]):
         global_account_fields=GLOBAL_ACCOUNT_FIELDS
     )
 
-    user_ws_url = "wss://tmom-app-backend.onrender.com/ws/user-activity"
-    market_ws_url = "wss://tmom-app-backend.onrender.com/ws/market-state"
+    user_ws_url = build_backend_ws_url("/ws/user-activity", user_id=user_id, session_id=session_id)
+    market_ws_url = build_backend_ws_url("/ws/market-state", user_id=user_id, session_id=session_id)
     
     user_ws = WebSocketClient(user_ws_url)
+    state = EngineState()
+
+    async def handle_user_activity(msg: str):
+        await user_activity_handler(msg, state)
 
     print("[ENGINE] Starting trading WebSockets in background...")
-    task_user = asyncio.create_task(user_ws.listen(user_activity_handler))
+    task_user = asyncio.create_task(user_ws.listen(handle_user_activity))
     task_market = asyncio.create_task(run_market_engine(
         market_ws_url, 
         playbook, 
         context_builder, 
         context_skeleton,
-        clients_set
+        output_registry,
+        state,
+        playbook_id,
+        session_id=session_id,
+        user_id=user_id,
     ))
 
     # Return the tasks so main.py can manage/cancel them later if needed

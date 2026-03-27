@@ -22,6 +22,8 @@ class WebSocketClient:
                 self.connection = await websockets.connect(self.url, **connect_args)
                 print(f"Connected to {self.url}")
                 return
+            except asyncio.CancelledError:
+                raise
             except websockets.exceptions.InvalidStatus as e:
                 if e.response.status_code == 429:
                     attempt += 1
@@ -53,6 +55,8 @@ class WebSocketClient:
 
         try:
             await self.connection.send(message)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             print(f"Error sending data to {self.url}: {e}")
             raise
@@ -80,6 +84,9 @@ class WebSocketClient:
                 # Force reconnection next loop
                 self.connection = None
                 
+            except asyncio.CancelledError:
+                self.connection = None
+                raise
             except websockets.exceptions.ConnectionClosed as e:
                 print(f"Connection closed (code: {e.code}, reason: {e.reason}). Reconnecting in {base_delay}s...")
                 self.connection = None
