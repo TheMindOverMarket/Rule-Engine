@@ -95,11 +95,13 @@ async def persist_backend_session_signal(
     event_type = "DEVIATION" if payload.get("deviation") else "ADHERENCE"
     event_payload = {
         "type": event_type,
+        "timestamp": payload.get("timestamp"),
         "tick": tick,
         "event_data": payload,
         "event_metadata": {
             "source": "rule_engine",
             "channel": "engine_output",
+            "signal_type": event_type.lower(),
         },
     }
 
