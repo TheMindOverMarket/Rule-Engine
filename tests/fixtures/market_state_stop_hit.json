@@ -1,0 +1,11 @@
+{
+  "current_time": "2026-03-27T14:35:00Z",
+  "price": 89.0,
+  "VWAP": 100.0,
+  "ATR": 2.0,
+  "EMA_SLOPE": 0.2,
+  "close_5m": 98.0,
+  "prior_candle_high_5m": 100.0,
+  "stop_price": 90.0,
+  "daily_loss_r": 1.5
+}

@@ -1,0 +1,88 @@
+{
+  "name": "Demo Long Setup",
+  "rules": [
+    {
+      "name": "Long Setup",
+      "id": "long_setup",
+      "category": "ENTRY",
+      "extensions": [
+        {
+          "id": "price_below_vwap_band",
+          "primitive": "comparison",
+          "params": {
+            "left": "price",
+            "op": "<",
+            "right": "VWAP - 1.5 * ATR"
+          }
+        },
+        {
+          "id": "ema_slope_positive",
+          "primitive": "comparison",
+          "params": {
+            "left": "EMA_SLOPE",
+            "op": ">",
+            "right": 0
+          }
+        },
+        {
+          "id": "close_above_prior_high",
+          "primitive": "comparison",
+          "params": {
+            "left": "close_5m",
+            "op": ">",
+            "right": "prior_candle_high_5m"
+          }
+        }
+      ],
+      "conditions": {
+        "all": [
+          "price_below_vwap_band",
+          "ema_slope_positive",
+          "close_above_prior_high"
+        ]
+      }
+    },
+    {
+      "name": "Stop Hit",
+      "id": "stop_hit",
+      "category": "RISK",
+      "extensions": [
+        {
+          "id": "stop_price_breached",
+          "primitive": "comparison",
+          "params": {
+            "left": "price",
+            "op": "<=",
+            "right": "stop_price"
+          }
+        }
+      ],
+      "conditions": {
+        "all": [
+          "stop_price_breached"
+        ]
+      }
+    },
+    {
+      "name": "Max Daily Loss Hit",
+      "id": "daily_loss_limit_hit",
+      "category": "DISCIPLINE",
+      "extensions": [
+        {
+          "id": "daily_loss_threshold",
+          "primitive": "accumulation",
+          "params": {
+            "field": "daily_loss_r",
+            "op": ">=",
+            "threshold": 3
+          }
+        }
+      ],
+      "conditions": {
+        "all": [
+          "daily_loss_threshold"
+        ]
+      }
+    }
+  ]
+}

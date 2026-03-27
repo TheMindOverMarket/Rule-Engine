@@ -8,40 +8,19 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dotenv import load_dotenv
 
 from broker.account_providers import AlpacaAccountProvider
-from network.websocket_client import WebSocketClient
-from engine import Playbook, RuleCategory, ContextBuilder, Primitive, PrimitiveRegistry
-from primitives import (
-    comparison_evaluator,
-    temporal_gate_evaluator,
-    account_comparison_evaluator,
-    set_membership_evaluator,
-    rate_limit_evaluator,
-    accumulation_evaluator,
-    sequence_evaluator,
+from logic_adherence import (
+    EngineState,
+    build_logic_adherence_payload,
+    flatten_market_payload,
+    register_default_primitives,
 )
+from network.websocket_client import WebSocketClient
+from engine import Playbook, RuleCategory, ContextBuilder
 from llm_layer.schemas import ContextSkeletonSchema
 from llm_layer.openai_client import OpenAILLMClient
 from llm_layer.rule_parser import RuleParser
 
-# Register Primitives
-def register_primitives():
-    print("registering primitives")
-    if "comparison" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("comparison", comparison_evaluator, required_context=["price"]))
-    if "temporal_gate" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("temporal_gate", temporal_gate_evaluator, required_context=["current_time"]))
-    if "account_comparison" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("account_comparison", account_comparison_evaluator))
-    if "set_membership" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("set_membership", set_membership_evaluator))
-    if "rate_limit" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("rate_limit", rate_limit_evaluator))
-    if "accumulation" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("accumulation", accumulation_evaluator))
-    if "sequence" not in PrimitiveRegistry._registry:
-        PrimitiveRegistry.register(Primitive("sequence", sequence_evaluator))
-
-register_primitives()
+register_default_primitives()
 
 # Load environment variables
 load_dotenv(".env")
@@ -200,44 +179,7 @@ class EngineOutputRegistry:
 
 client_registry = EngineOutputRegistry()
 
-# Mock State Manager
-class EngineState:
-    def __init__(self):
-        self.user_took_action = False
-    
-    async def get_and_reset_user_action(self) -> bool:
-        val = self.user_took_action
-        self.user_took_action = False
-        return val
-
 GLOBAL_ACCOUNT_FIELDS = ["equity", "buying_power", "cash", "daytrade_count", "open_positions"]
-
-def _flatten_market_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    flattened: Dict[str, Any] = {}
-
-    for key, value in data.items():
-        if key in {"metrics", "indicator_values"}:
-            continue
-        flattened[key] = value
-
-    metrics = data.get("metrics", {})
-    if isinstance(metrics, dict):
-        for key, value in metrics.items():
-            flattened.setdefault(key, value)
-
-    indicator_values = data.get("indicator_values", {})
-    if isinstance(indicator_values, dict):
-        for timeframe, timeframe_metrics in indicator_values.items():
-            if not isinstance(timeframe_metrics, dict):
-                continue
-            for metric_name, metric_value in timeframe_metrics.items():
-                flattened_key = metric_name if timeframe == "1m" else f"{metric_name}_{timeframe}"
-                flattened.setdefault(flattened_key, metric_value)
-
-    if "current_time" not in flattened and "timestamp" in flattened:
-        flattened["current_time"] = flattened["timestamp"]
-
-    return flattened
 
 
 async def user_activity_handler(msg: str, state: EngineState):
@@ -306,71 +248,30 @@ async def run_market_engine(
 
             print(" [MARKET] -> Evaluating Playbook")
             
-            # 3. Evaluate Playbook
-            playbook_results = playbook.evaluate(full_context)
-            
-            print(" [MARKET] -> Determining Triggers")
-            
-            # 4. Determine triggers
-            entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
-            rule_result = len(entry_triggers) > 0
-
-            triggered_entry_ids = [
-                str(rule.id) if rule.id else rule.name
-                for rule in playbook.rules
-                if rule.category == RuleCategory.ENTRY and (rule.id or rule.name) in entry_triggers
-            ]
-            if not triggered_entry_ids and entry_triggers:
-                triggered_entry_ids = [str(trigger) for trigger in entry_triggers]
-
-            # 4b. Map all rules in the playbook to their boolean trigger status
-            rule_evaluations = {}
-            deviation_true = []
-            deviation_false = []
-            for rule in playbook.rules:
-                rule_identifier = str(rule.id) if rule.id else rule.name
-                result_keys = playbook_results.get(rule.category, [])
-                rule_is_true = (rule.id or rule.name) in result_keys
-                rule_evaluations[rule_identifier] = rule_is_true
-                if rule_is_true:
-                    deviation_true.append(rule_identifier)
-                else:
-                    deviation_false.append(rule_identifier)
-
             print(" [MARKET] -> Checking User Action")
             
-            # 5. User Action & Deviation
+            # 3. User Action & Payload
             user_action_bool = await state.get_and_reset_user_action()
-            deviation = rule_result != user_action_bool
 
             print(" [MARKET] -> Preparing Output Payload")
-            
-            # 6. Output Payload
-            rule_summary = ", ".join(triggered_entry_ids) if triggered_entry_ids else "No entry rule triggered"
-            output_payload = {
-                "timestamp": market_context.get("current_time") or market_context.get("timestamp"),
-                "price": market_context.get("price"),
-                "playbook_id": playbook_id,
-                "session_id": session_id,
-                "user_id": user_id,
-                "rule": rule_summary,
-                "rule_triggered": rule_result,
-                "triggered_entries": triggered_entry_ids,
-                "rule_evaluations": rule_evaluations,
-                "action": user_action_bool,
-                "deviation": deviation,
-                "deviation_true": deviation_true,
-                "deviation_false": deviation_false
-            }
+            output_payload = build_logic_adherence_payload(
+                playbook=playbook,
+                context=full_context,
+                user_action_bool=user_action_bool,
+                state=state,
+                playbook_id=playbook_id,
+                session_id=session_id,
+                user_id=user_id,
+            )
             
             price_display = output_payload["price"] if output_payload["price"] is not None else "N/A"
             print(
                 f"TIME: {output_payload['timestamp']} | "
                 f"PRICE: {str(price_display):<8} | "
-                f"RULE: {str(rule_result):<5} | "
-                f"TRIGGERS: {entry_triggers} | "
+                f"RULE: {str(output_payload['rule_triggered']):<5} | "
+                f"TRIGGERS: {output_payload['triggered_entries']} | "
                 f"ACTION: {str(user_action_bool):<5} | "
-                f"DEVIATION: {str(deviation)}"
+                f"DEVIATION: {str(output_payload['deviation'])}"
             )
             
             print(" [MARKET] -> Broadcasting Payload")
