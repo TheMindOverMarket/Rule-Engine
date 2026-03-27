@@ -11,6 +11,7 @@ from broker.account_providers import AlpacaAccountProvider
 from logic_adherence import (
     EngineState,
     build_logic_adherence_payload,
+    build_session_history_context,
     flatten_market_payload,
     register_default_primitives,
 )
@@ -103,6 +104,31 @@ async def persist_backend_session_signal(
         except Exception as exc:
             print(f"[ENGINE WARNING] Could not persist session signal: {exc}")
             return False
+
+
+async def fetch_backend_session_replay(session_id: str) -> list[dict[str, Any]]:
+    replay_url = build_backend_http_url(f"/sessions/{session_id}/replay")
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                replay_url,
+                headers={"accept": "application/json"},
+            ) as response:
+                if response.status == 200:
+                    payload = await response.json()
+                    if isinstance(payload, list):
+                        return payload
+
+                err_text = await response.text()
+                print(
+                    f"[ENGINE WARNING] Failed to fetch session replay. "
+                    f"Status: {response.status}, Response: {err_text}"
+                )
+                return []
+        except Exception as exc:
+            print(f"[ENGINE WARNING] Could not fetch session replay: {exc}")
+            return []
 
 
 async def patch_backend_playbook(playbook_id: str, payload: Dict[str, Any]) -> bool:
@@ -237,6 +263,9 @@ async def run_market_engine(
             
             # 1. Build Base Context from the market payload, including nested metrics.
             market_context = flatten_market_payload(data)
+            if session_id:
+                replay_events = await fetch_backend_session_replay(session_id)
+                market_context.update(build_session_history_context(replay_events))
 
             print(" [MARKET] -> Hydrating Full Context")
             

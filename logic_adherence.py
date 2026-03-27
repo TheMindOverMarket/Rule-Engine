@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Iterable, Optional, Set
 
-from engine import Playbook, Primitive, PrimitiveRegistry, RuleCategory
+from engine import Extension, Playbook, Primitive, PrimitiveRegistry, RuleBlock, RuleCategory
 from primitives import (
     accumulation_evaluator,
     account_comparison_evaluator,
@@ -89,14 +89,102 @@ def flatten_market_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return flattened
 
 
-def _classify_rule_deviation(rule_category: RuleCategory, rule_is_true: bool, user_action_bool: bool) -> bool:
+def build_session_history_context(session_events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    history: Dict[str, list[str]] = {
+        "trades": [],
+        "side_flip": [],
+        "stop_loss": [],
+    }
+    event_history: list[tuple[str, str]] = []
+    last_fill_side: Optional[str] = None
+
+    for event in session_events:
+        event_type = str(event.get("type", "")).upper()
+        event_data = event.get("event_data") or {}
+        timestamp = event_data.get("timestamp") or event.get("timestamp")
+        if not timestamp:
+            continue
+
+        if event_type == "TRADING":
+            alpaca_event_type = str(event_data.get("alpaca_event_type", "")).lower()
+            if alpaca_event_type == "fill":
+                history["trades"].append(timestamp)
+
+                side = event_data.get("side")
+                if last_fill_side and side and side != last_fill_side:
+                    history["side_flip"].append(timestamp)
+                if side:
+                    last_fill_side = side
+
+                exit_reason = str(event_data.get("exit_reason", "")).lower()
+                if exit_reason == "stop_loss" or event_data.get("stop_loss") is True:
+                    history["stop_loss"].append(timestamp)
+
+        if event_type == "SYSTEM":
+            action = str(event_data.get("action", "")).lower()
+            if action in {"loss", "win", "stop_loss"}:
+                event_history.append((timestamp, action))
+
+    return {
+        "history": history,
+        "event_history": event_history,
+    }
+
+
+def _comparison_truth_means_violation(rule_name: str, extension: Extension) -> bool:
+    params = extension.params
+    left = str(params.get("left", "")).lower()
+    right = params.get("right")
+    right_str = str(right).lower()
+    op = str(params.get("op", "")).strip()
+    rule_name = rule_name.lower()
+
+    if "stop" in rule_name or "stop" in left or "stop" in right_str:
+        return True
+    if "loss" in rule_name or "loss" in left or "drawdown" in rule_name:
+        return True
+    if "position size" in rule_name or "max one position" in rule_name:
+        return False
+    if op in {"<=", ">=", "=="}:
+        return False
+    if isinstance(right, (int, float)) and float(right) < 0 and op in {"<", "<="}:
+        return True
+
+    return False
+
+
+def _constraint_rule_is_deviation(rule: RuleBlock, rule_is_true: bool) -> bool:
+    if not rule.extensions:
+        return rule_is_true
+
+    # Constraint-style rules often encode the *allowed* state directly.
+    # We infer whether a truthy result means "compliant" or "violating"
+    # from the primitives and parameter shapes currently produced by the parser.
+    truth_means_violation = False
+
+    for extension in rule.extensions.values():
+        primitive_name = extension.primitive_name
+        if primitive_name in {"rate_limit", "account_comparison", "set_membership"}:
+            truth_means_violation = False
+            break
+        if primitive_name in {"accumulation", "sequence"}:
+            truth_means_violation = True
+            break
+        if primitive_name == "comparison":
+            truth_means_violation = _comparison_truth_means_violation(rule.name, extension)
+            break
+
+    return rule_is_true if truth_means_violation else not rule_is_true
+
+
+def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bool: bool) -> bool:
     # ENTRY / PROCESS rules describe the action the trader should have taken.
-    if rule_category in ENTRY_LIKE_CATEGORIES:
+    if rule.category in ENTRY_LIKE_CATEGORIES:
         return rule_is_true != user_action_bool
 
     # RISK / DISCIPLINE / EXIT / OVERRIDES act like active violations or constraints.
-    if rule_category in CONSTRAINT_CATEGORIES:
-        return rule_is_true
+    if rule.category in CONSTRAINT_CATEGORIES:
+        return _constraint_rule_is_deviation(rule, rule_is_true)
 
     return rule_is_true != user_action_bool
 
@@ -131,7 +219,7 @@ def build_logic_adherence_payload(
         rule_is_true = (rule.id or rule.name) in result_keys
         rule_evaluations[rule_identifier] = rule_is_true
 
-        is_deviation = _classify_rule_deviation(rule.category, rule_is_true, user_action_bool)
+        is_deviation = _classify_rule_deviation(rule, rule_is_true, user_action_bool)
         if is_deviation:
             deviation_true.append(rule_identifier)
         else:

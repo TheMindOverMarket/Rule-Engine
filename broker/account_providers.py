@@ -12,8 +12,8 @@ class AlpacaAccountProvider:
     """
 
     def __init__(self, api_key: str = None, api_secret: str = None, paper: bool = True):
-        self.api_key = api_key or os.getenv("API_KEY")
-        self.api_secret = api_secret or os.getenv("SECRET_KEY")
+        self.api_key = api_key or os.getenv("ALPACA_API_KEY") or os.getenv("API_KEY")
+        self.api_secret = api_secret or os.getenv("ALPACA_API_SECRET") or os.getenv("SECRET_KEY")
         self.client = TradingClient(self.api_key, self.api_secret, paper=paper)
 
     def get_snapshot(self, fields: List[str] = None) -> Dict[str, any]:

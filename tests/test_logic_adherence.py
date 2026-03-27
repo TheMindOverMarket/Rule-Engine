@@ -9,7 +9,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from engine import Playbook, RuleBlock, RuleCategory
-from logic_adherence import EngineState, build_logic_adherence_payload, register_default_primitives
+from logic_adherence import (
+    EngineState,
+    build_logic_adherence_payload,
+    build_session_history_context,
+    register_default_primitives,
+)
 
 
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures"
@@ -111,6 +116,184 @@ class LogicAdherenceTests(unittest.TestCase):
         self.assertIsNotNone(last_payload)
         self.assertTrue(last_payload["deviation"])
         self.assertIn("daily_loss_limit_hit", last_payload["deviation_true"])
+
+    def test_constraint_rules_are_green_when_constraints_are_satisfied(self) -> None:
+        playbook = Playbook(name="Constraint Playbook")
+        max_position_rule = RuleBlock(
+            category=RuleCategory.RISK,
+            skeleton={
+                "name": "Max One Position At A Time",
+                "extensions": [
+                    {
+                        "id": "single_position",
+                        "primitive": "account_comparison",
+                        "params": {
+                            "field": "long_market_value",
+                            "op": "==",
+                            "value": 0,
+                        },
+                    }
+                ],
+                "conditions": {"all": ["single_position"]},
+            },
+        )
+        max_position_rule.id = "max_one_position"
+        max_trades_rule = RuleBlock(
+            category=RuleCategory.DISCIPLINE,
+            skeleton={
+                "name": "Max 5 Trades Per Day",
+                "extensions": [
+                    {
+                        "id": "max_trades",
+                        "primitive": "rate_limit",
+                        "params": {
+                            "metric": "trades",
+                            "max": 5,
+                            "window_minutes": 1440,
+                        },
+                    }
+                ],
+                "conditions": {"all": ["max_trades"]},
+            },
+        )
+        max_trades_rule.id = "max_5_trades"
+        playbook.add_rule(max_position_rule)
+        playbook.add_rule(max_trades_rule)
+
+        payload = build_logic_adherence_payload(
+            playbook=playbook,
+            context={
+                "current_time": "2026-03-27T15:50:00Z",
+                "account": {
+                    "trading_blocked": False,
+                    "trade_suspended_by_user": False,
+                    "pattern_day_trader": False,
+                    "daytrade_count": 0,
+                    "buying_power": 1000,
+                    "cash": 1000,
+                    "long_market_value": 0,
+                },
+                "history": {
+                    "trades": [],
+                },
+            },
+            user_action_bool=False,
+            state=EngineState(),
+            playbook_id="demo-playbook",
+        )
+
+        self.assertFalse(payload["deviation"])
+        self.assertIn("max_one_position", payload["deviation_false"])
+        self.assertIn("max_5_trades", payload["deviation_false"])
+
+    def test_constraint_rules_turn_red_when_constraints_are_breached(self) -> None:
+        playbook = Playbook(name="Constraint Playbook")
+        max_position_rule = RuleBlock(
+            category=RuleCategory.RISK,
+            skeleton={
+                "name": "Max One Position At A Time",
+                "extensions": [
+                    {
+                        "id": "single_position",
+                        "primitive": "account_comparison",
+                        "params": {
+                            "field": "long_market_value",
+                            "op": "==",
+                            "value": 0,
+                        },
+                    }
+                ],
+                "conditions": {"all": ["single_position"]},
+            },
+        )
+        max_position_rule.id = "max_one_position"
+        max_trades_rule = RuleBlock(
+            category=RuleCategory.DISCIPLINE,
+            skeleton={
+                "name": "Max 5 Trades Per Day",
+                "extensions": [
+                    {
+                        "id": "max_trades",
+                        "primitive": "rate_limit",
+                        "params": {
+                            "metric": "trades",
+                            "max": 5,
+                            "window_minutes": 1440,
+                        },
+                    }
+                ],
+                "conditions": {"all": ["max_trades"]},
+            },
+        )
+        max_trades_rule.id = "max_5_trades"
+        playbook.add_rule(max_position_rule)
+        playbook.add_rule(max_trades_rule)
+
+        payload = build_logic_adherence_payload(
+            playbook=playbook,
+            context={
+                "current_time": "2026-03-27T15:50:00Z",
+                "account": {
+                    "trading_blocked": False,
+                    "trade_suspended_by_user": False,
+                    "pattern_day_trader": False,
+                    "daytrade_count": 0,
+                    "buying_power": 1000,
+                    "cash": 1000,
+                    "long_market_value": 25,
+                },
+                "history": {
+                    "trades": [
+                        "2026-03-27T09:00:00Z",
+                        "2026-03-27T10:00:00Z",
+                        "2026-03-27T11:00:00Z",
+                        "2026-03-27T12:00:00Z",
+                        "2026-03-27T13:00:00Z",
+                        "2026-03-27T14:00:00Z",
+                    ],
+                },
+            },
+            user_action_bool=False,
+            state=EngineState(),
+            playbook_id="demo-playbook",
+        )
+
+        self.assertTrue(payload["deviation"])
+        self.assertIn("max_one_position", payload["deviation_true"])
+        self.assertIn("max_5_trades", payload["deviation_true"])
+
+    def test_session_history_builder_derives_trade_and_flip_history(self) -> None:
+        session_events = [
+            {
+                "type": "TRADING",
+                "timestamp": "2026-03-27T15:45:19.475150Z",
+                "event_data": {
+                    "alpaca_event_type": "fill",
+                    "timestamp": "2026-03-27T15:45:19.475150Z",
+                    "side": "buy",
+                },
+            },
+            {
+                "type": "TRADING",
+                "timestamp": "2026-03-27T15:48:19.475150Z",
+                "event_data": {
+                    "alpaca_event_type": "fill",
+                    "timestamp": "2026-03-27T15:48:19.475150Z",
+                    "side": "sell",
+                },
+            },
+        ]
+
+        history_context = build_session_history_context(session_events)
+
+        self.assertEqual(
+            history_context["history"]["trades"],
+            ["2026-03-27T15:45:19.475150Z", "2026-03-27T15:48:19.475150Z"],
+        )
+        self.assertEqual(
+            history_context["history"]["side_flip"],
+            ["2026-03-27T15:48:19.475150Z"],
+        )
 
 
 if __name__ == "__main__":
