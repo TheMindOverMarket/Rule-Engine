@@ -86,6 +86,44 @@ def build_backend_ws_url(path: str, **query_params: Optional[str]) -> str:
     )
 
 
+async def persist_backend_session_signal(
+    session_id: str,
+    payload: Dict[str, Any],
+    tick: Optional[int] = None,
+) -> bool:
+    event_url = build_backend_http_url(f"/sessions/{session_id}/events")
+    event_type = "DEVIATION" if payload.get("deviation") else "ADHERENCE"
+    event_payload = {
+        "type": event_type,
+        "tick": tick,
+        "event_data": payload,
+        "event_metadata": {
+            "source": "rule_engine",
+            "channel": "engine_output",
+        },
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                event_url,
+                json=event_payload,
+                headers={"accept": "application/json"},
+            ) as response:
+                if response.status in (200, 201):
+                    return True
+
+                err_text = await response.text()
+                print(
+                    f"[ENGINE WARNING] Failed to persist session signal. "
+                    f"Status: {response.status}, Response: {err_text}"
+                )
+                return False
+        except Exception as exc:
+            print(f"[ENGINE WARNING] Could not persist session signal: {exc}")
+            return False
+
+
 async def patch_backend_playbook(playbook_id: str, payload: Dict[str, Any]) -> bool:
     patch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     async with aiohttp.ClientSession() as session:
@@ -237,8 +275,10 @@ async def run_market_engine(
 
     client = WebSocketClient(ws_url)
     print(f" [MARKET] Connecting to {ws_url}...")
+    evaluation_tick = 0
     
     async def market_handler(msg: str):
+        nonlocal evaluation_tick
         try:
             print(" [MARKET] -> Loading JSON message")
             data = json.loads(msg)
@@ -322,8 +362,16 @@ async def run_market_engine(
             )
             
             print(" [MARKET] -> Broadcasting Payload")
-            
+
+            evaluation_tick += 1
             await output_registry.broadcast(output_payload, user_id=user_id, session_id=session_id)
+
+            if session_id:
+                await persist_backend_session_signal(
+                    session_id=session_id,
+                    payload=output_payload,
+                    tick=evaluation_tick,
+                )
                         
         except Exception as e:
             import traceback
