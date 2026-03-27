@@ -315,19 +315,27 @@ async def run_market_engine(
             entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
             rule_result = len(entry_triggers) > 0
 
-            triggered_entry_labels = [
-                rule.name
+            triggered_entry_ids = [
+                str(rule.id) if rule.id else rule.name
                 for rule in playbook.rules
                 if rule.category == RuleCategory.ENTRY and (rule.id or rule.name) in entry_triggers
             ]
-            if not triggered_entry_labels and entry_triggers:
-                triggered_entry_labels = [str(trigger) for trigger in entry_triggers]
+            if not triggered_entry_ids and entry_triggers:
+                triggered_entry_ids = [str(trigger) for trigger in entry_triggers]
 
             # 4b. Map all rules in the playbook to their boolean trigger status
             rule_evaluations = {}
+            deviation_true = []
+            deviation_false = []
             for rule in playbook.rules:
+                rule_identifier = str(rule.id) if rule.id else rule.name
                 result_keys = playbook_results.get(rule.category, [])
-                rule_evaluations[rule.name] = (rule.id or rule.name) in result_keys
+                rule_is_true = (rule.id or rule.name) in result_keys
+                rule_evaluations[rule_identifier] = rule_is_true
+                if rule_is_true:
+                    deviation_true.append(rule_identifier)
+                else:
+                    deviation_false.append(rule_identifier)
 
             print(" [MARKET] -> Checking User Action")
             
@@ -338,7 +346,7 @@ async def run_market_engine(
             print(" [MARKET] -> Preparing Output Payload")
             
             # 6. Output Payload
-            rule_summary = ", ".join(triggered_entry_labels) if triggered_entry_labels else "No entry rule triggered"
+            rule_summary = ", ".join(triggered_entry_ids) if triggered_entry_ids else "No entry rule triggered"
             output_payload = {
                 "timestamp": market_context.get("current_time") or market_context.get("timestamp"),
                 "price": market_context.get("price"),
@@ -347,10 +355,12 @@ async def run_market_engine(
                 "user_id": user_id,
                 "rule": rule_summary,
                 "rule_triggered": rule_result,
-                "triggered_entries": triggered_entry_labels,
+                "triggered_entries": triggered_entry_ids,
                 "rule_evaluations": rule_evaluations,
                 "action": user_action_bool,
-                "deviation": deviation
+                "deviation": deviation,
+                "deviation_true": deviation_true,
+                "deviation_false": deviation_false
             }
             
             price_display = output_payload["price"] if output_payload["price"] is not None else "N/A"
