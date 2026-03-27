@@ -236,7 +236,7 @@ async def run_market_engine(
             print(" [MARKET] -> Extracting Base Context")
             
             # 1. Build Base Context from the market payload, including nested metrics.
-            market_context = _flatten_market_payload(data)
+            market_context = flatten_market_payload(data)
 
             print(" [MARKET] -> Hydrating Full Context")
             
