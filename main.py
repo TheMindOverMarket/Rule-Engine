@@ -15,6 +15,7 @@ app = FastAPI(title="Rule Engine Orchestrator")
 # Keep track of active background tasks per playbook so start/stop only affect
 # the targeted live session instead of cancelling every playbook globally.
 active_trading_tasks = {}
+active_compile_tasks = {}
 
 
 def _prune_finished_tasks(playbook_id: str) -> None:
@@ -39,6 +40,12 @@ async def cancel_playbook_tasks(playbook_id: str) -> int:
     return len(tasks)
 
 
+def _prune_finished_compile_task(playbook_id: str) -> None:
+    task = active_compile_tasks.get(playbook_id)
+    if task and task.done():
+        active_compile_tasks.pop(playbook_id, None)
+
+
 @app.get("/")
 @app.get("/health")
 async def handle_health():
@@ -55,8 +62,18 @@ async def run_execute_in_background(playbook_id: str, session_id: str | None = N
             task.add_done_callback(lambda _task, pb=playbook_id: _prune_finished_tasks(pb))
 
 
+async def run_compile_in_background(playbook_id: str) -> None:
+    """Run playbook compilation without tying up the request lifecycle."""
+    try:
+        await compile_playbook(playbook_id)
+    except Exception as exc:
+        print(f" [API] Compile task failed for playbook {playbook_id}: {exc}")
+    finally:
+        active_compile_tasks.pop(playbook_id, None)
+
+
 @app.post("/api/rules/compile")
-async def compile_rule(playbook_id: str, background_tasks: BackgroundTasks):
+async def compile_rule(playbook_id: str):
     """
     POST /api/rules/compile?playbook_id=abc
     Compiles the natural language prompt using the LLM and populates the database.
@@ -66,12 +83,25 @@ async def compile_rule(playbook_id: str, background_tasks: BackgroundTasks):
 
     print(f" \n[API] Received Compile for Playbook: {playbook_id}")
 
-    # Launch compilation in the background
-    background_tasks.add_task(compile_playbook, playbook_id)
+    _prune_finished_compile_task(playbook_id)
+    existing_task = active_compile_tasks.get(playbook_id)
+    if existing_task and not existing_task.done():
+        return {
+            "status": "accepted",
+            "message": "Engine compile already in progress for this playbook.",
+            "playbook_id": playbook_id,
+            "already_running": True,
+        }
+
+    task = asyncio.create_task(run_compile_in_background(playbook_id))
+    active_compile_tasks[playbook_id] = task
+    task.add_done_callback(lambda _task, pb=playbook_id: _prune_finished_compile_task(pb))
 
     return {
-        "status": "success",
-        "message": "Engine compile started. Compiling playbook via LLM."
+        "status": "accepted",
+        "message": "Engine compile started. Compiling playbook via LLM.",
+        "playbook_id": playbook_id,
+        "already_running": False,
     }
 
 

@@ -372,7 +372,11 @@ async def compile_playbook(playbook_id: str):
     
     print(f"[ENGINE] Parsing rule playbook...")
     try:
-        playbook, context_skeleton = parser.parse(prompt_text)
+        playbook, context_skeleton = await asyncio.to_thread(parser.parse, prompt_text)
+        if context_skeleton is None:
+            print("[ENGINE ERROR] Parser returned no context skeleton.")
+            await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
+            return
         skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
         
         # 3. Persist the parsed rules/conditions to backend DB
