@@ -5,12 +5,18 @@ from typing import Dict, Any
 
 API_BASE_URL = "https://tmom-app-backend.onrender.com"
 
-async def create_rule(session: aiohttp.ClientSession, playbook_id: str, name: str) -> str:
+async def create_rule(
+    session: aiohttp.ClientSession,
+    playbook_id: str,
+    name: str,
+    category: str
+) -> str:
     """Creates a new Rule in the database."""
     url = f"{API_BASE_URL}/rules/"
     payload = {
         "name": name,
         "playbook_id": playbook_id,
+        "category": category,
         "is_active": True
     }
     async with session.post(url, json=payload) as resp:
@@ -69,7 +75,8 @@ async def populate_playbook_tables(playbook_id: str, playbook: Playbook):
         for rule in playbook.rules:
             try:
                 # 1. Create Rule
-                rule_id = await create_rule(session, playbook_id, rule.name)
+                category = rule.category.name.lower() if hasattr(rule.category, "name") else str(rule.category).lower()
+                rule_id = await create_rule(session, playbook_id, rule.name, category)
                 rule.id = rule_id
                 print(f"  [+] Created Rule ID: {rule_id} for '{rule.name}'")
                 
