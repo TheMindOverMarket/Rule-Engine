@@ -180,7 +180,7 @@ def _constraint_rule_is_deviation(rule: RuleBlock, rule_is_true: bool) -> bool:
 def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bool: bool) -> bool:
     # ENTRY / PROCESS rules describe the action the trader should have taken.
     if rule.category in ENTRY_LIKE_CATEGORIES:
-        return rule_is_true != user_action_bool
+        return user_action_bool and not rule_is_true
 
     # RISK / DISCIPLINE / EXIT / OVERRIDES act like active violations or constraints.
     if rule.category in CONSTRAINT_CATEGORIES:
