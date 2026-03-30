@@ -199,15 +199,21 @@ def temporal_gate_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> 
     current_time_val = context.get('current_time')
     current_seconds = parse_time_to_seconds(current_time_val)
 
-    start = params.get('start_time')
-    end = params.get('end_time')
+    start_raw = params.get('start_time')
+    end_raw = params.get('end_time')
 
-    if start and end:
-        return start <= current_seconds <= end
+    # If either boundary is defined, evaluate them independently
+    if start_raw is not None or end_raw is not None:
+        valid = True
+        if start_raw is not None:
+            valid = valid and (current_seconds >= parse_time_to_seconds(start_raw))
+        if end_raw is not None:
+            valid = valid and (current_seconds <= parse_time_to_seconds(end_raw))
+        return valid
 
-    cooldown_end = params.get('cooldown_end')
-    if cooldown_end:
-        return current_seconds >= cooldown_end
+    cooldown_end_raw = params.get('cooldown_end')
+    if cooldown_end_raw is not None:
+        return current_seconds >= parse_time_to_seconds(cooldown_end_raw)
 
     return True
 
