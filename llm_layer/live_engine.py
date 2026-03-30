@@ -176,9 +176,10 @@ async def run_market_engine(
             user_action_bool = await state.get_and_reset_user_action()
 
             # 5. Calculate Deviation
-            # True if they disagree (Rule says True vs User False, or Rule False vs User True)
-            # False if they agree
-            deviation = rule_result != user_action_bool
+            # For ENTRY rules, they behave as permissive guardrails:
+            # - Action taken when rule is FALSE = Deviation (violated restriction)
+            # - Action NOT taken when rule is TRUE = NO Deviation (just passing on a valid setup)
+            deviation = user_action_bool and not rule_result
 
             # 6. Output Result
             output_payload = {
