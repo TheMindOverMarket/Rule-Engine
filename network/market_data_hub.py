@@ -1,0 +1,69 @@
+import asyncio
+import json
+from typing import Dict, Set, Callable, Awaitable, Optional
+from network.websocket_client import WebSocketClient
+
+class MarketDataHub:
+    """
+    Manages shared WebSocket connections to reduce redundant upstream connections.
+    Allows multiple subscribers to listen to the same stream.
+    """
+    _instances: Dict[str, 'MarketDataHub'] = {}
+
+    def __init__(self, url: str):
+        self.url = url
+        self.client = WebSocketClient(url)
+        self.subscribers: Set[Callable[[str], Awaitable[None]]] = set()
+        self.is_listening = False
+        self._listen_task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+
+    @classmethod
+    async def get_instance(cls, url: str) -> 'MarketDataHub':
+        """Returns a singleton instance for a given URL."""
+        if url not in cls._instances:
+            cls._instances[url] = MarketDataHub(url)
+        return cls._instances[url]
+
+    async def subscribe(self, callback: Callable[[str], Awaitable[None]]):
+        """Registers a callback to receive messages from this stream."""
+        async with self._lock:
+            self.subscribers.add(callback)
+            if not self.is_listening:
+                self.is_listening = True
+                self._listen_task = asyncio.create_task(self.client.listen(self._distribute))
+
+    async def unsubscribe(self, callback: Callable[[str], Awaitable[None]]):
+        """Unregisters a callback. Stops the upstream connection if no subscribers remain."""
+        async with self._lock:
+            if callback in self.subscribers:
+                self.subscribers.remove(callback)
+            
+            if not self.subscribers and self.is_listening:
+                if self._listen_task:
+                    self._listen_task.cancel()
+                    try:
+                        await self._listen_task
+                    except asyncio.CancelledError:
+                        pass
+                self.is_listening = False
+                self._listen_task = None
+                # Optional: We could also close the underlying connection if needed
+                if self.client.connection:
+                    await self.client.connection.close()
+                    self.client.connection = None
+
+    async def _distribute(self, message: str):
+        """Internal callback that broadcasts received messages to all subscribers."""
+        # Work on a copy of subscribers in case one unsubscribes during iteration
+        current_subscribers = list(self.subscribers)
+        tasks = []
+        for callback in current_subscribers:
+            tasks.append(asyncio.create_task(callback(message)))
+        
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def send(self, data: dict):
+        """Sends data through the shared connection (e.g., subscription requests)."""
+        await self.client.send(data)

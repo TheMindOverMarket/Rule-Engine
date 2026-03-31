@@ -16,6 +16,7 @@ from logic_adherence import (
     register_default_primitives,
 )
 from network.websocket_client import WebSocketClient
+from network.market_data_hub import MarketDataHub
 from engine import Playbook, RuleCategory, ContextBuilder
 from llm_layer.schemas import ContextSkeletonSchema
 from llm_layer.openai_client import OpenAILLMClient
@@ -243,9 +244,10 @@ async def run_market_engine(
         print(json.dumps(dict(context_skeleton), indent=2))
     print("-----------------------------------------\n")
 
-    client = WebSocketClient(ws_url)
-    print(f" [MARKET] Connecting to {ws_url}...")
+    print(f" [MARKET] Connecting to {ws_url} via Hub...")
     evaluation_tick = 0
+    
+    hub = MarketDataHub.get_instance(ws_url)
     
     async def market_handler(msg: str):
         nonlocal evaluation_tick
@@ -320,7 +322,16 @@ async def run_market_engine(
             print(f" [MARKET ENGINE CRITICAL ERROR] Failed during market_handler: {e}")
             traceback.print_exc()
 
-    await client.listen(market_handler)
+    # Subscribe to the hub instead of listening directly to a local client
+    subscription_id = await hub.subscribe(market_handler)
+    print(f" [MARKET] Subscribed to Hub with ID: {subscription_id}")
+    
+    # We return a function that can be used to unsubscribe later
+    async def cleanup():
+        print(f" [MARKET] Unsubscribing {subscription_id} from Hub...")
+        await hub.unsubscribe(subscription_id)
+        
+    return cleanup
 
 
 async def compile_playbook(playbook_id: str):
@@ -469,25 +480,45 @@ async def execute_playbook(
     user_ws_url = build_backend_ws_url("/ws/user-activity", user_id=user_id, session_id=session_id)
     market_ws_url = build_backend_ws_url("/ws/market-state", user_id=user_id, session_id=session_id)
     
-    user_ws = WebSocketClient(user_ws_url)
+    user_hub = MarketDataHub.get_instance(user_ws_url)
     state = EngineState()
 
     async def handle_user_activity(msg: str):
         await user_activity_handler(msg, state)
 
-    print("[ENGINE] Starting trading WebSockets in background...")
-    task_user = asyncio.create_task(user_ws.listen(handle_user_activity))
-    task_market = asyncio.create_task(run_market_engine(
-        market_ws_url, 
-        playbook, 
-        context_builder, 
-        context_skeleton,
-        output_registry,
-        state,
-        playbook_id,
-        session_id=session_id,
-        user_id=user_id,
-    ))
+    print("[ENGINE] Subscribing to trading WebSockets via Hub...")
+    user_sub_id = await user_hub.subscribe(handle_user_activity)
+    
+    # Wrap run_market_engine in a task
+    market_engine_cleanup_fn = None
+    
+    async def market_wrapper():
+        nonlocal market_engine_cleanup_fn
+        market_engine_cleanup_fn = await run_market_engine(
+            market_ws_url, 
+            playbook, 
+            context_builder, 
+            context_skeleton,
+            output_registry,
+            state,
+            playbook_id,
+            session_id=session_id,
+            user_id=user_id,
+        )
 
-    # Return the tasks so main.py can manage/cancel them later if needed
-    return task_user, task_market
+    task_market = asyncio.create_task(market_wrapper())
+
+    # Create a wrapper task that manages both
+    async def master_task():
+        try:
+            await task_market
+        finally:
+            print("[ENGINE] Master task finishing, cleaning up subscriptions...")
+            await user_hub.unsubscribe(user_sub_id)
+            if market_engine_cleanup_fn:
+                await market_engine_cleanup_fn()
+
+    final_task = asyncio.create_task(master_task())
+
+    # Return the final task so main.py can manage it
+    return final_task, None 

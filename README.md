@@ -77,10 +77,15 @@ To completely understand the inner workings, please read through the **[docs/ fo
 
 ---
 
-## 🛠 Active To-Do List & Upgrades
-- Finalize the automated data-cleaning pipeline for market ingestion buffers (handle API downtime seamlessly).
-- Implement broader limits tracking for AWS/Cloud provider services natively.
-- Implement robust random-jitter reconnection logic for WebSockets (to avoid thundering herd failures upon backend disconnects).
-- Ensure fewer redundant WebSocket connections are sent to upstream providers (e.g. Binance/Alpaca) by multiplexing.
-- Build a mechanism to dynamically deactivate individual rules (like entries) chronologically as the trading session matures.
-- Implement token expiration and dynamic revocation for WebSocket authentication.
+## 🛠 Next Steps & Upgrades
+
+### WebSocket Multiplexing (In Progress)
+- [x] **MarketDataHub**: Implemented singleton-per-URL multiplexer to share WebSocket connections across playbooks.
+- [ ] **User-Wide Streams**: Update backend `broadcast.py` to allow a "user-scope" stream, enabling the Hub to multiplex all a user's playbooks into one connection.
+- [ ] **Direct Provider Integration**: Transition the Hub to connect directly to Alpaca/Binance for lower latency, bypassing the backend for market data.
+
+### Performance & Reliability
+- [ ] **Account Data Caching**: Implement a TTL cache (e.g. 5s) in `AlpacaAccountProvider` to stop redundant REST API calls to Alpaca on every tick.
+- [ ] **Auto-Reconnection**: Implement robust exponential backoff for `WebSocketClient` to handle network blips.
+- [ ] **Dynamic Rules**: Build a mechanism to dynamically deactivate individual rules as the trading session matures.
+- [ ] **Auth Security**: Implement token expiration and dynamic revocation for WebSocket authentication.
