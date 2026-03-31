@@ -56,9 +56,6 @@ This process acts as the gateway. Depending on your configuration, it bootstraps
 ---
 
 ## 📖 Engine Architecture & Documentation
-
-The codebase has evolved from scattered functions into a fully architected pipeline. 
-
 To completely understand the inner workings, please read through the **[docs/ folder](docs/)** in chronological order:
 
 1. [Architectural Overview](docs/00_architecture_overview.md) - High-level system design.
