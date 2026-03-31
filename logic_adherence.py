@@ -177,6 +177,36 @@ def _constraint_rule_is_deviation(rule: RuleBlock, rule_is_true: bool) -> bool:
     return rule_is_true if truth_means_violation else not rule_is_true
 
 
+def _is_action_gated_constraint(rule: RuleBlock) -> bool:
+    """
+    Determines if a constraint restricts ACTIONS (thus requiring user_action_bool to deviate)
+    or restricts STATE (triggering continuous deviation if held).
+    """
+    if rule.category == RuleCategory.EXIT:
+        return False
+
+    if not rule.extensions:
+        return True
+
+    for extension in rule.extensions.values():
+        primitive_name = extension.primitive_name
+        rule_name = rule.name.lower()
+
+        if primitive_name in {"temporal_gate", "rate_limit", "account_comparison", "set_membership"}:
+            return True
+
+        if primitive_name in {"accumulation", "sequence"}:
+            return True
+
+        if primitive_name == "comparison":
+            if "stop" in rule_name or "target" in rule_name:
+                return False
+            if "daily" in rule_name or "drawdown" in rule_name:
+                return True
+
+    return True
+
+
 def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bool: bool) -> bool:
     # ENTRY / PROCESS rules describe the action the trader should have taken.
     if rule.category in ENTRY_LIKE_CATEGORIES:
@@ -184,7 +214,10 @@ def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bo
 
     # RISK / DISCIPLINE / EXIT / OVERRIDES act like active violations or constraints.
     if rule.category in CONSTRAINT_CATEGORIES:
-        return _constraint_rule_is_deviation(rule, rule_is_true)
+        is_violating = _constraint_rule_is_deviation(rule, rule_is_true)
+        if _is_action_gated_constraint(rule):
+            return user_action_bool and is_violating
+        return is_violating
 
     return rule_is_true != user_action_bool
 
