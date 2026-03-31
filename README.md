@@ -83,6 +83,4 @@ To completely understand the inner workings, please read through the **[docs/ fo
 - Implement robust random-jitter reconnection logic for WebSockets (to avoid thundering herd failures upon backend disconnects).
 - Ensure fewer redundant WebSocket connections are sent to upstream providers (e.g. Binance/Alpaca) by multiplexing.
 - Build a mechanism to dynamically deactivate individual rules (like entries) chronologically as the trading session matures.
-- Introduce an explicit validation layer (Warning -> Confirmation) if the trader attempts to fire a blocked order directly through the platform.
-- Check and execute partial fills dynamically vs limit supply. 
 - Implement token expiration and dynamic revocation for WebSocket authentication.
