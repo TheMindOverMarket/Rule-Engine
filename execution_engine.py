@@ -375,8 +375,9 @@ async def compile_playbook(playbook_id: str):
     try:
         playbook, context_skeleton = await asyncio.to_thread(parser.parse, prompt_text)
         if context_skeleton is None:
-            print("[ENGINE ERROR] Parser returned no context skeleton.")
-            await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
+            reason = "Parser returned no context skeleton."
+            print(f"[ENGINE ERROR] {reason}")
+            await patch_backend_playbook(playbook_id, {"generation_status": "FAILED", "failure_reason": reason})
             return
         skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
         
@@ -385,13 +386,14 @@ async def compile_playbook(playbook_id: str):
         try:
             await populate_playbook_tables(playbook_id, playbook)
         except Exception as pop_err:
-            print(f"[ENGINE WARNING] DB Population failed: {pop_err}")
-            await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
+            reason = f"DB Population failed: {pop_err}"
+            print(f"[ENGINE WARNING] {reason}")
+            await patch_backend_playbook(playbook_id, {"generation_status": "FAILED", "failure_reason": reason})
             return
 
     except Exception as e:
         print(f"[ENGINE ERROR] Failed to parse playbook: {e}")
-        await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
+        await patch_backend_playbook(playbook_id, {"generation_status": "FAILED", "failure_reason": str(e)})
         return
 
     # 4. Patch the Context Skeleton & Compiled Rules back to Supabase
