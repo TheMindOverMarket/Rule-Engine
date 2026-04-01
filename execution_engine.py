@@ -487,7 +487,9 @@ async def execute_playbook(
     async def handle_user_activity(msg: str):
         await user_activity_handler(msg, state)
 
-    print("[ENGINE] Subscribing to trading WebSockets via Hub...")
+    print(f"[ENGINE] Subscribing via Hub to:")
+    print(f"         - User Activity: {user_ws_url}")
+    print(f"         - Market State:  {market_ws_url}")
     user_sub_id = await user_hub.subscribe(handle_user_activity)
     
     # Wrap run_market_engine in a task
