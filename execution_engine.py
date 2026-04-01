@@ -244,6 +244,7 @@ async def run_market_engine(
         print(json.dumps(dict(context_skeleton), indent=2))
     print("-----------------------------------------\n")
 
+    print(f"\n[ENGINE][MARKET] Initializing Market Engine for user_id: {user_id}, session_id: {session_id}")
     print(f" [MARKET] Connecting to {ws_url} via Hub...")
     evaluation_tick = 0
     
@@ -429,7 +430,10 @@ async def execute_playbook(
     2. Reconstruct Playbook object in memory
     3. Spin up the trading engine loops
     """
-    print(f"\n[ENGINE] Starting execution for Playbook: {playbook_id}")
+    print(f"\n[ENGINE][EXECUTE] Starting execution context")
+    print(f"         Playbook: {playbook_id}")
+    print(f"         Session:  {session_id}")
+    print(f"         User:     {user_id}")
 
     fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     async with aiohttp.ClientSession() as session:
