@@ -20,7 +20,8 @@ active_compile_tasks = {}
 
 def _prune_finished_tasks(playbook_id: str) -> None:
     tasks = active_trading_tasks.get(playbook_id, [])
-    remaining = [task for task in tasks if not task.done()]
+    # Filter out None and finished tasks
+    remaining = [task for task in tasks if task is not None and not task.done()]
     if remaining:
         active_trading_tasks[playbook_id] = remaining
     else:
@@ -57,8 +58,8 @@ async def run_execute_in_background(playbook_id: str, session_id: str | None = N
     """Wrapper to run the playbook execute flow and capture the background tasks."""
     tasks = await execute_playbook(playbook_id, client_registry, session_id=session_id, user_id=user_id)
     if tasks:
-        active_trading_tasks[playbook_id] = list(tasks)
-        for task in tasks:
+        active_trading_tasks[playbook_id] = [t for t in tasks if t is not None]
+        for task in active_trading_tasks[playbook_id]:
             task.add_done_callback(lambda _task, pb=playbook_id: _prune_finished_tasks(pb))
 
 

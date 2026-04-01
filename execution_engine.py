@@ -522,6 +522,4 @@ async def execute_playbook(
                 await market_engine_cleanup_fn()
 
     final_task = asyncio.create_task(master_task())
-
-    # Return the final task so main.py can manage it
-    return final_task, None 
+    return [final_task]
