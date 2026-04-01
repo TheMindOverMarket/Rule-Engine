@@ -64,9 +64,11 @@ class WebSocketClient:
     async def listen(self, callback: Callable[[str], Awaitable[None]]):
         """
         Listens for messages and calls the callback for each message.
-        Automatically reconnects if the connection is dropped.
+        Automatically reconnects if the connection is dropped with exponential backoff.
         """
-        base_delay = 5.0
+        base_delay = 2.0
+        max_delay = 60.0
+        retry_count = 0
         
         while True:
             try:
@@ -74,6 +76,8 @@ class WebSocketClient:
                 if not self.connection:
                     print(f"Connecting to {self.url}...")
                     await self.connect()
+                    # Reset retry count after successful connection
+                    retry_count = 0
                 
                 print(f"Listening on {self.url}...")
                 async for message in self.connection:
@@ -81,18 +85,20 @@ class WebSocketClient:
                 
                 # If we get here, the server closed the connection cleanly (or we broke out)
                 print("Connection closed by server. Reconnecting...")
-                # Force reconnection next loop
                 self.connection = None
                 
             except asyncio.CancelledError:
                 self.connection = None
                 raise
             except websockets.exceptions.ConnectionClosed as e:
-                print(f"Connection closed (code: {e.code}, reason: {e.reason}). Reconnecting in {base_delay}s...")
+                print(f"WebSocket connection closed (code: {e.code}, reason: {e.reason}).")
                 self.connection = None
             except Exception as e:
-                print(f"Error while listening: {e}. Reconnecting in {base_delay}s...")
+                print(f"Unexpected error while listening: {e}.")
                 self.connection = None
             
-            # Wait before reconnecting to avoid spamming
-            await asyncio.sleep(base_delay)
+            # Backoff before reconnecting
+            delay = min(base_delay * (2 ** retry_count), max_delay)
+            print(f"Reconnecting to {self.url} in {delay:.1f}s...")
+            await asyncio.sleep(delay)
+            retry_count += 1

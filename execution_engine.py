@@ -247,7 +247,7 @@ async def run_market_engine(
     print(f" [MARKET] Connecting to {ws_url} via Hub...")
     evaluation_tick = 0
     
-    hub = MarketDataHub.get_instance(ws_url)
+    hub = await MarketDataHub.get_instance(ws_url)
     
     async def market_handler(msg: str):
         nonlocal evaluation_tick
@@ -328,8 +328,7 @@ async def run_market_engine(
     
     # We return a function that can be used to unsubscribe later
     async def cleanup():
-        print(f" [MARKET] Unsubscribing {subscription_id} from Hub...")
-        await hub.unsubscribe(subscription_id)
+        await hub.unsubscribe(market_handler)
         
     return cleanup
 
@@ -479,10 +478,10 @@ async def execute_playbook(
         global_account_fields=GLOBAL_ACCOUNT_FIELDS
     )
 
-    user_ws_url = build_backend_ws_url("/ws/user-activity", user_id=user_id, session_id=session_id)
-    market_ws_url = build_backend_ws_url("/ws/market-state", user_id=user_id, session_id=session_id)
+    user_ws_url = build_backend_ws_url("/ws/user-activity", user_id=user_id)
+    market_ws_url = build_backend_ws_url("/ws/market-state", user_id=user_id)
     
-    user_hub = MarketDataHub.get_instance(user_ws_url)
+    user_hub = await MarketDataHub.get_instance(user_ws_url)
     state = EngineState()
 
     async def handle_user_activity(msg: str):
@@ -516,7 +515,7 @@ async def execute_playbook(
             await task_market
         finally:
             print("[ENGINE] Master task finishing, cleaning up subscriptions...")
-            await user_hub.unsubscribe(user_sub_id)
+            await user_hub.unsubscribe(handle_user_activity)
             if market_engine_cleanup_fn:
                 await market_engine_cleanup_fn()
 

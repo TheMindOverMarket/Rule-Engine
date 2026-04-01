@@ -15,16 +15,27 @@ class AlpacaAccountProvider:
         self.api_key = api_key or os.getenv("ALPACA_API_KEY") or os.getenv("API_KEY")
         self.api_secret = api_secret or os.getenv("ALPACA_API_SECRET") or os.getenv("SECRET_KEY")
         self.client = TradingClient(self.api_key, self.api_secret, paper=paper)
+        
+        # Performance Multiplexing/Caching
+        self._cached_account = None
+        self._last_fetch_time = 0
+        self._cache_ttl_seconds = 5.0
 
     def get_snapshot(self, fields: List[str] = None) -> Dict[str, any]:
         """
         Returns a dictionary containing the requested account fields.
-        If no fields are specified, return all fields.
+        Uses a 5s TTL cache to prevent redundant REST calls on every tick.
         """
-        account = self.client.get_account()
-
-        # account_dict = account.__dict__
-        account_dict = dict(account)
+        import time
+        now = time.time()
+        
+        if self._cached_account is None or (now - self._last_fetch_time > self._cache_ttl_seconds):
+            print(f"[ACCOUNT] Cache expired or empty. Fetching fresh snapshot from Alpaca... (Age: {now - self._last_fetch_time:.2f}s)")
+            account = self.client.get_account()
+            self._cached_account = dict(account)
+            self._last_fetch_time = now
+        
+        account_dict = self._cached_account
 
         if fields:
             snapshot = {k: account_dict.get(k) for k in fields}
