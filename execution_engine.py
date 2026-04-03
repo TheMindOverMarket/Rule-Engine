@@ -519,11 +519,22 @@ async def execute_playbook(
     async def master_task():
         try:
             await task_market
+            print(f"[ENGINE] Master task for playbook {playbook_id} is now running. Waiting for events...")
+            import sys
+            sys.stdout.flush()
+            
+            # Wait indefinitely until cancelled by the API or session shutdown
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            print(f"[ENGINE] Master task for playbook {playbook_id} received cancellation.")
         finally:
-            print("[ENGINE] Master task finishing, cleaning up subscriptions...")
+            print(f"[ENGINE] Master task for playbook {playbook_id} finishing, cleaning up subscriptions...")
             await user_hub.unsubscribe(handle_user_activity)
             if market_engine_cleanup_fn:
                 await market_engine_cleanup_fn()
+            import sys
+            sys.stdout.flush()
 
-    final_task = asyncio.create_task(master_task())
+    final_task = asyncio.create_task(master_task(), name=f"master_task_{playbook_id}")
     return [final_task]

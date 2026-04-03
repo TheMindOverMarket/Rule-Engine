@@ -56,11 +56,25 @@ async def handle_health():
 
 async def run_execute_in_background(playbook_id: str, session_id: str | None = None, user_id: str | None = None):
     """Wrapper to run the playbook execute flow and capture the background tasks."""
-    tasks = await execute_playbook(playbook_id, client_registry, session_id=session_id, user_id=user_id)
-    if tasks:
-        active_trading_tasks[playbook_id] = [t for t in tasks if t is not None]
-        for task in active_trading_tasks[playbook_id]:
-            task.add_done_callback(lambda _task, pb=playbook_id: _prune_finished_tasks(pb))
+    import sys
+    print(f" [API] Launching EXECUTE background task for session {session_id} and user {user_id}")
+    sys.stdout.flush()
+    
+    try:
+        tasks = await execute_playbook(playbook_id, client_registry, session_id=session_id, user_id=user_id)
+        if tasks:
+            active_trading_tasks[playbook_id] = [t for t in tasks if t is not None]
+            for task in active_trading_tasks[playbook_id]:
+                task.add_done_callback(lambda _task, pb=playbook_id: _prune_finished_tasks(pb))
+            print(f" [API] Successfully started {len(active_trading_tasks[playbook_id])} live engine tasks.")
+        else:
+            print(f" [API] Failed to start live engine tasks for playbook {playbook_id}.")
+    except Exception as exc:
+        print(f" [API CRITICAL] Error launching EXECUTE background task: {exc}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        sys.stdout.flush()
 
 
 async def run_compile_in_background(playbook_id: str) -> None:
