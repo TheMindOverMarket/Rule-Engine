@@ -29,6 +29,7 @@ load_dotenv(".env")
 
 BACKEND_BASE_URL = os.getenv("TMOM_BACKEND_BASE_URL", "https://tmom-app-backend.onrender.com").rstrip("/")
 BACKEND_WS_BASE_URL = os.getenv("TMOM_BACKEND_WS_BASE_URL", "").rstrip("/")
+DEFAULT_MARKET_SYMBOL = "BTC/USD"
 
 
 def _derive_ws_base_url(http_base_url: str) -> str:
@@ -65,6 +66,36 @@ def build_backend_ws_url(path: str, **query_params: Optional[str]) -> str:
             split_url.fragment,
         )
     )
+
+
+def normalize_market_symbol(value: Optional[str]) -> str:
+    if not value:
+        return DEFAULT_MARKET_SYMBOL
+
+    normalized = value.strip().upper().replace("-", "/")
+    if not normalized:
+        return DEFAULT_MARKET_SYMBOL
+
+    if "/" not in normalized:
+        normalized = f"{normalized}/USD"
+
+    base_asset, quote_asset = normalized.split("/", 1)
+    base_asset = base_asset.strip() or DEFAULT_MARKET_SYMBOL.split("/", 1)[0]
+    quote_asset = quote_asset.strip() or "USD"
+    return f"{base_asset}/{quote_asset}"
+
+
+def resolve_playbook_symbol(payload: Dict[str, Any]) -> str:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return normalize_market_symbol(
+        payload.get("symbol") or payload.get("market") or context.get("symbol")
+    )
+
+
+def ensure_context_symbol(context: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    synced_context = dict(context)
+    synced_context["symbol"] = normalize_market_symbol(symbol)
+    return synced_context
 
 
 async def persist_backend_session_signal(
@@ -237,6 +268,7 @@ async def run_market_engine(
     session_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ):
+    target_symbol = normalize_market_symbol(context_skeleton.symbol)
     print("\n--- FRONTEND CONTEXT REQUEST SKELETON ---")
     if hasattr(context_skeleton, "model_dump_json"):
         print(context_skeleton.model_dump_json(indent=2))
@@ -266,6 +298,10 @@ async def run_market_engine(
             
             # 1. Build Base Context from the market payload, including nested metrics.
             market_context = flatten_market_payload(data)
+            incoming_symbol = normalize_market_symbol(market_context.get("symbol"))
+            if incoming_symbol != target_symbol:
+                print(f" [MARKET] -> Ignoring tick for {incoming_symbol}; waiting for {target_symbol}")
+                return
             if session_id:
                 replay_events = await fetch_backend_session_replay(session_id)
                 market_context.update(build_session_history_context(replay_events))
@@ -347,13 +383,16 @@ async def compile_playbook(playbook_id: str):
     # 1. Fetch raw user prompt from Supabase
     fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     prompt_text = ""
+    persisted_symbol = DEFAULT_MARKET_SYMBOL
+    playbook_data: Dict[str, Any] = {}
     
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
-                    prompt_text = data.get("original_nl_input") or data.get("rule_text", "")
+                    playbook_data = await resp.json()
+                    persisted_symbol = resolve_playbook_symbol(playbook_data)
+                    prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
                     print(f"[ENGINE] Successfully fetched prompt ({len(prompt_text)} chars).")
                 else:
                     print(f"[ENGINE ERROR] Failed to fetch playbook from Supabase. Status: {resp.status}")
@@ -380,6 +419,7 @@ async def compile_playbook(playbook_id: str):
             await patch_backend_playbook(playbook_id, {"generation_status": "FAILED", "failure_reason": reason})
             return
         skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
+        skeleton_dict = ensure_context_symbol(skeleton_dict, persisted_symbol)
         
         # 3. Persist the parsed rules/conditions to backend DB
         from populate_tables import populate_playbook_tables
@@ -410,7 +450,11 @@ async def compile_playbook(playbook_id: str):
             "conditions": rule.conditions
         })
         
-    patch_data = {"context": skeleton_dict}
+    patch_data = {
+        "symbol": persisted_symbol,
+        "market": persisted_symbol,
+        "context": skeleton_dict,
+    }
     patch_data["context"]["compiled_rules"] = compiled_rules
 
     patch_data["generation_status"] = "COMPLETED"
@@ -436,14 +480,17 @@ async def execute_playbook(
     print(f"         User:     {user_id}")
 
     fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
+    resolved_symbol = DEFAULT_MARKET_SYMBOL
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    resolved_symbol = resolve_playbook_symbol(data)
                     # Priority: 1. API Parameter, 2. Database Record
                     effective_user_id = user_id or data.get("user_id")
                     print(f" [ENGINE] Resolved execute user_id: {effective_user_id} (API: {user_id}, DB: {data.get('user_id')})")
+                    print(f" [ENGINE] Resolved execute symbol: {resolved_symbol}")
                     user_id = effective_user_id
                 else:
                     print(f"[ENGINE ERROR] Failed to fetch playbook to execute. Status: {resp.status}")
@@ -470,6 +517,7 @@ async def execute_playbook(
 
     # Need to remove our injected 'compiled_rules' before validating ContextSkeletonSchema
     safe_context_data = {k: v for k, v in context_data.items() if k != "compiled_rules"}
+    safe_context_data = ensure_context_symbol(safe_context_data, resolved_symbol)
     context_skeleton = ContextSkeletonSchema(**safe_context_data)
 
     # 3. Spin up trading engine loops
