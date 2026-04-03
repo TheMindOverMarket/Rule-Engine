@@ -170,7 +170,7 @@ Available primitives:
 CONTEXT SKELETON (DATA REQUIREMENTS)
 --------------------
 You must explicitly list all data required to evaluate the rule.
-- "symbol": The trading pair or ticker symbol if specified (e.g. "BTC/USD", "AAPL").
+- "symbol": The trading pair or ticker symbol if specified (e.g. "ASSET/USD", "AAPL").
 - "market_data": List specific raw market indicators needed. MUST be EXACT matches from the provided `MARKET_DATA_FIELDS` list.
 - "ta_lib_metrics": List technical indicators needed. Each must be an object with:
     - `name`: string representing the TA-Lib function. You MUST use EXACTLY one of the keys from the TA-Lib documentation object below.

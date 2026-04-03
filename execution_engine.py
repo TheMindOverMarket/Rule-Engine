@@ -29,9 +29,6 @@ load_dotenv(".env")
 
 BACKEND_BASE_URL = os.getenv("TMOM_BACKEND_BASE_URL", "https://tmom-app-backend.onrender.com").rstrip("/")
 BACKEND_WS_BASE_URL = os.getenv("TMOM_BACKEND_WS_BASE_URL", "").rstrip("/")
-DEFAULT_MARKET_SYMBOL = "BTC/USD"
-
-
 def _derive_ws_base_url(http_base_url: str) -> str:
     if http_base_url.startswith("https://"):
         return f"wss://{http_base_url[len('https://'):]}"
@@ -70,18 +67,20 @@ def build_backend_ws_url(path: str, **query_params: Optional[str]) -> str:
 
 def normalize_market_symbol(value: Optional[str]) -> str:
     if not value:
-        return DEFAULT_MARKET_SYMBOL
+        return ""
 
     normalized = value.strip().upper().replace("-", "/")
     if not normalized:
-        return DEFAULT_MARKET_SYMBOL
+        return ""
 
     if "/" not in normalized:
         normalized = f"{normalized}/USD"
 
     base_asset, quote_asset = normalized.split("/", 1)
-    base_asset = base_asset.strip() or DEFAULT_MARKET_SYMBOL.split("/", 1)[0]
+    base_asset = base_asset.strip()
     quote_asset = quote_asset.strip() or "USD"
+    if not base_asset:
+        return ""
     return f"{base_asset}/{quote_asset}"
 
 
@@ -383,7 +382,7 @@ async def compile_playbook(playbook_id: str):
     # 1. Fetch raw user prompt from Supabase
     fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     prompt_text = ""
-    persisted_symbol = DEFAULT_MARKET_SYMBOL
+    persisted_symbol = ""
     playbook_data: Dict[str, Any] = {}
     
     async with aiohttp.ClientSession() as session:
@@ -404,6 +403,11 @@ async def compile_playbook(playbook_id: str):
     if not prompt_text:
         print("[ENGINE ERROR] Prompt text is empty. Cannot compile engine.")
         await patch_backend_playbook(playbook_id, {"generation_status": "FAILED"})
+        return
+    if not persisted_symbol:
+        reason = "Playbook is missing a persisted market symbol."
+        print(f"[ENGINE ERROR] {reason}")
+        await patch_backend_playbook(playbook_id, {"generation_status": "FAILED", "failure_reason": reason})
         return
 
     # 2. Parse the rule using the LLM
@@ -480,7 +484,7 @@ async def execute_playbook(
     print(f"         User:     {user_id}")
 
     fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
-    resolved_symbol = DEFAULT_MARKET_SYMBOL
+    resolved_symbol = ""
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
@@ -498,6 +502,10 @@ async def execute_playbook(
         except Exception as e:
             print(f"[ENGINE ERROR] Could not reach Supabase for execute: {e}")
             return None
+
+    if not resolved_symbol:
+        print("[ENGINE ERROR] Playbook missing market symbol. Execution cannot start.")
+        return None
 
     context_data = data.get("context", {})
     if not context_data:
