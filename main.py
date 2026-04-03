@@ -1,7 +1,7 @@
 import os
 import asyncio
 import uvicorn
-from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
 from dotenv import load_dotenv
 
 load_dotenv(".env")
@@ -124,17 +124,18 @@ async def compile_rule(playbook_id: str):
 async def execute_rule(
     playbook_id: str,
     background_tasks: BackgroundTasks,
-    session_id: str | None = None,
-    user_id: str | None = None,
+    session_id: str | None = Query(None),
+    user_id: str | None = Query(None),
 ):
     """
-    POST /api/rules/execute?playbook_id=abc
     Starts executing the previously compiled rules using the live websocket streams.
     """
     if not playbook_id:
-        return {"error": "Missing 'playbook_id' in query parameters."}
+        return {"status": "error", "message": "Missing 'playbook_id' in query parameters."}
 
-    print(f" \n[API] Received Execute for Playbook: {playbook_id}")
+    print(f"\n [API] Received Execute request for playbook {playbook_id}")
+    print(f"       Session:  {session_id}")
+    print(f"       User:     {user_id}")
 
     cancelled_tasks = await cancel_playbook_tasks(playbook_id)
 
@@ -182,7 +183,7 @@ async def websocket_handler(websocket: WebSocket):
     user_id = websocket.query_params.get("user_id")
     session_id = websocket.query_params.get("session_id")
 
-    print(" [WEBSOCKET] Engine Result Viewer Connected")
+    print(f" [WEBSOCKET] Engine Result Viewer Connected (user:{user_id}, session:{session_id})")
     await client_registry.connect(websocket, user_id=user_id, session_id=session_id)
     
     try:

@@ -441,7 +441,10 @@ async def execute_playbook(
             async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    user_id = user_id or data.get("user_id")
+                    # Priority: 1. API Parameter, 2. Database Record
+                    effective_user_id = user_id or data.get("user_id")
+                    print(f" [ENGINE] Resolved execute user_id: {effective_user_id} (API: {user_id}, DB: {data.get('user_id')})")
+                    user_id = effective_user_id
                 else:
                     print(f"[ENGINE ERROR] Failed to fetch playbook to execute. Status: {resp.status}")
                     return None
