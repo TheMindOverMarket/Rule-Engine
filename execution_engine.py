@@ -303,7 +303,31 @@ async def run_market_engine(
                 return
             if session_id:
                 replay_events = await fetch_backend_session_replay(session_id)
-                market_context.update(build_session_history_context(replay_events))
+                session_history = build_session_history_context(replay_events)
+                market_context.update(session_history)
+
+                # Relative Session Timing Calculation
+                start_time_str = session_history.get("session_start_time")
+                curr_time_val = market_context.get("current_time") or market_context.get("timestamp")
+                
+                if start_time_str and curr_time_val:
+                    try:
+                        from datetime import datetime, timezone
+                        def to_dt(ts):
+                            if isinstance(ts, (int, float)):
+                                return datetime.fromtimestamp(ts, tz=timezone.utc)
+                            # Handle Z suffix for fromisoformat
+                            ts_clean = ts.replace("Z", "+00:00")
+                            return datetime.fromisoformat(ts_clean)
+                        
+                        start_dt = to_dt(start_time_str)
+                        curr_dt = to_dt(curr_time_val)
+                        
+                        delta = curr_dt - start_dt
+                        market_context["minutes_since_start"] = delta.total_seconds() / 60.0
+                        market_context["session_start_time_abs"] = start_time_str
+                    except Exception as e:
+                        print(f" [ENGINE WARNING] Failed to compute minutes_since_start: {e}")
 
             print(" [MARKET] -> Hydrating Full Context")
             

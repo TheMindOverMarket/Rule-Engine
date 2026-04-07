@@ -196,26 +196,38 @@ def sequence_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
 
 def temporal_gate_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
     """Evaluates if current time is within allowed window or past a cooldown."""
+    valid = True
+
+    # 1. Absolute Time-of-Day Check
     current_time_val = context.get('current_time')
-    current_seconds = parse_time_to_seconds(current_time_val)
-
-    start_raw = params.get('start_time')
-    end_raw = params.get('end_time')
-
-    # If either boundary is defined, evaluate them independently
-    if start_raw is not None or end_raw is not None:
-        valid = True
+    if current_time_val is not None:
+        current_seconds = parse_time_to_seconds(current_time_val)
+        start_raw = params.get('start_time')
+        end_raw = params.get('end_time')
+        
         if start_raw is not None:
             valid = valid and (current_seconds >= parse_time_to_seconds(start_raw))
         if end_raw is not None:
             valid = valid and (current_seconds <= parse_time_to_seconds(end_raw))
-        return valid
 
+    # 2. Relative Session Offset Check
+    minutes_since_start = context.get('minutes_since_start')
+    if minutes_since_start is not None:
+        start_offset = params.get('start_offset_minutes')
+        end_offset = params.get('end_offset_minutes')
+        
+        if start_offset is not None:
+            valid = valid and (minutes_since_start >= float(start_offset))
+        if end_offset is not None:
+            valid = valid and (minutes_since_start <= float(end_offset))
+
+    # 3. Cooldown Check
     cooldown_end_raw = params.get('cooldown_end')
     if cooldown_end_raw is not None:
-        return current_seconds >= parse_time_to_seconds(cooldown_end_raw)
+        current_seconds = parse_time_to_seconds(current_time_val)
+        valid = valid and (current_seconds >= parse_time_to_seconds(cooldown_end_raw))
 
-    return True
+    return valid
 
 def account_comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
     """

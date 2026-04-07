@@ -62,7 +62,9 @@ PRIMITIVE_MANIFEST = {
         "params": {
             "start_time": "number | null (seconds since midnight)",
             "end_time": "number | null (seconds since midnight)",
-            "cooldown_end": "number | null (unix timestamp)"
+            "cooldown_end": "number | null (unix timestamp)",
+            "start_offset_minutes": "number | null (minutes since session start)",
+            "end_offset_minutes": "number | null (minutes since session start)"
         },
         "example": {"start_time": 34200, "end_time": 41400}
     },

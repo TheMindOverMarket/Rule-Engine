@@ -97,6 +97,7 @@ def build_session_history_context(session_events: Iterable[Dict[str, Any]]) -> D
     }
     event_history: list[tuple[str, str]] = []
     last_fill_side: Optional[str] = None
+    session_start_time: Optional[str] = None
 
     for event in session_events:
         event_type = str(event.get("type", "")).upper()
@@ -122,12 +123,15 @@ def build_session_history_context(session_events: Iterable[Dict[str, Any]]) -> D
 
         if event_type == "SYSTEM":
             action = str(event_data.get("action", "")).lower()
+            if action == "start_session":
+                session_start_time = timestamp
             if action in {"loss", "win", "stop_loss"}:
                 event_history.append((timestamp, action))
 
     return {
         "history": history,
         "event_history": event_history,
+        "session_start_time": session_start_time,
     }
 
 

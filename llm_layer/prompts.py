@@ -131,7 +131,12 @@ NUMERIC VALUES
 - If the user provides a numeric threshold (e.g. "2R", "3 trades", "$10,000", "60 minutes"),
   treat it as a literal number.
 - Convert numeric thresholds to numbers.
-- Convert time expressions to seconds since midnight (e.g., 9:30 AM → 34200).
+- Convert absolute time expressions (e.g., "9:30 AM") to seconds since midnight (e.g., 34200).
+- If the user specifies time RELATIVE to the session start (e.g., "wait 5 minutes before trading", "only trade in the first hour"):
+  1. Use the `temporal_gate` primitive.
+  2. Use `start_offset_minutes` (for "wait/after") or `end_offset_minutes` (for "within/before").
+  3. Keep the value as a literal number of minutes (e.g., "5 minutes" -> 5).
+  4. DO NOT convert relative offsets to 'seconds since midnight'.
 
 --------------------
 ACCOUNT FIELDS (CRITICAL)
