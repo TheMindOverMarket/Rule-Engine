@@ -111,7 +111,11 @@ Required top-level keys:
 --------------------
 RULE BLOCKS AND NAMING
 --------------------
-- You MUST give every rule object a descriptive `name` (e.g., "Long VWAP Setup", "Short VWAP Setup", "Max Daily Loss Constraint").
+- You MUST give every rule object a descriptive `name` (e.g., "Equity Requirements Met", "Long VWAP Setup", "Daily Loss Within Limit").
+- Use positive, permission-based phrasing for rule names.
+  - GOOD: "Session Warm-up Complete", "Risk Buffer Maintained", "Entry Condition Confirmed".
+  - BAD: "Wait 5 Minutes", "Max Loss Violation", "RSI Overbought".
+  - Rationale: In the UI, a Red X next to a "Positive" name clearly indicates that the requirement is NOT met.
 - If the user provides multiple distinct setups for the same category (e.g., a long setup AND a short setup for ENTRY), you MUST create a separate rule object for each setup. Do NOT combine them into a single massive 'any' condition in one rule.
 
 --------------------

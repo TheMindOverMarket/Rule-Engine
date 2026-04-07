@@ -211,6 +211,20 @@ def _is_action_gated_constraint(rule: RuleBlock) -> bool:
     return True
 
 
+def _evaluate_rule_permission(rule: RuleBlock, rule_is_true: bool) -> bool:
+    """
+    Returns True if the current state PERMITS the action associated with this rule.
+    (Green Check = True, Red X = False)
+    """
+    # For Entry behaviors, 'True' means the signal is active and you are allowed to enter.
+    if rule.category in {RuleCategory.ENTRY, RuleCategory.PROCESS}:
+        return rule_is_true
+        
+    # For Constraints (Risk, Discipline, etc), 'is_deviation' means the rule is broken.
+    # Therefore, permission is the inverse of the deviation state.
+    return not _constraint_rule_is_deviation(rule, rule_is_true)
+
+
 def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bool: bool) -> bool:
     # ENTRY / PROCESS rules describe the action the trader should have taken.
     if rule.category in ENTRY_LIKE_CATEGORIES:
@@ -247,6 +261,7 @@ def build_logic_adherence_payload(
         triggered_entry_ids = [str(trigger) for trigger in entry_triggers]
 
     rule_evaluations: Dict[str, bool] = {}
+    rule_status: Dict[str, bool] = {}
     deviation_true = []
     deviation_false = []
 
@@ -261,6 +276,10 @@ def build_logic_adherence_payload(
             deviation_true.append(rule_identifier)
         else:
             deviation_false.append(rule_identifier)
+        
+        # 4. Icon Status (GO/NO-GO)
+        # This is independent of the user's action and represents the "current gate state" for the UI.
+        rule_status[rule_identifier] = _evaluate_rule_permission(rule, rule_is_true)
 
     overall_deviation = bool(deviation_true)
     accumulated_deviation = state.record_deviation(overall_deviation)
@@ -276,6 +295,7 @@ def build_logic_adherence_payload(
         "rule_triggered": len(triggered_entry_ids) > 0,
         "triggered_entries": triggered_entry_ids,
         "rule_evaluations": rule_evaluations,
+        "rule_status": rule_status,
         "action": user_action_bool,
         "deviation": overall_deviation,
         "deviation_true": deviation_true,
