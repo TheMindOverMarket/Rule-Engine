@@ -1,8 +1,12 @@
 import os
 import asyncio
-import uvicorn
+import uuid
+import sys
 from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
 from dotenv import load_dotenv
+
+# Unique identifier for this instance to help diagnose Render deployment logs
+INSTANCE_ID = str(uuid.uuid4())[:8]
 
 load_dotenv(".env")
 
@@ -11,6 +15,16 @@ from execution_engine import compile_playbook, execute_playbook, client_registry
 
 # Initialize FastAPI app
 app = FastAPI(title="Rule Engine Orchestrator")
+
+@app.on_event("startup")
+async def startup_event():
+    print(f" [LIFECYCLE] Rule Engine Instance {INSTANCE_ID} starting...")
+    sys.stdout.flush()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print(f" [LIFECYCLE] Rule Engine Instance {INSTANCE_ID} shutting down...")
+    sys.stdout.flush()
 
 # Keep track of active background tasks per playbook so start/stop only affect
 # the targeted live session instead of cancelling every playbook globally.
@@ -51,8 +65,13 @@ def _prune_finished_compile_task(playbook_id: str) -> None:
 @app.get("/health")
 async def handle_health():
     """Simple health check endpoint."""
-    print(" [HEALTH] Engine received poke from heartbeat/probe.")
-    return {"status": "healthy", "service": "rule-engine-orchestrator"}
+    print(f" [HEALTH] Instance {INSTANCE_ID} received poke from heartbeat/probe.")
+    sys.stdout.flush()
+    return {
+        "status": "healthy", 
+        "service": "rule-engine-orchestrator",
+        "instance_id": INSTANCE_ID
+    }
 
 
 async def run_execute_in_background(playbook_id: str, session_id: str | None = None, user_id: str | None = None):
@@ -201,9 +220,11 @@ async def websocket_handler(websocket: WebSocket):
 
 
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.getenv("PORT", 8080))
-    print(f" [SERVER] Starting FastAPI Orchestrator on port {port}...")
+    print(f" [SERVER] Instance {INSTANCE_ID} starting FastAPI Orchestrator on port {port}...")
+    sys.stdout.flush()
     try:
         uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
     except KeyboardInterrupt:
-        print("\nEngine Orchestrator stopped.")
+        print(f"\n [SERVER] Instance {INSTANCE_ID} stopped via KeyboardInterrupt.")

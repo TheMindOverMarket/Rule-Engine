@@ -460,7 +460,7 @@ async def compile_playbook(playbook_id: str):
         return
 
     # 2. Parse the rule using the LLM
-    llm_client = OpenAILLMClient(model="gpt-4.1")
+    llm_client = OpenAILLMClient(model="gpt-4-turbo")
     parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
     
     print(f"[ENGINE] Parsing rule playbook...")
