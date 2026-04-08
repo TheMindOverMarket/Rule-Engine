@@ -32,9 +32,21 @@ class MarketDataHub:
             if not self.is_listening:
                 print(f"[HUB] Starting new upstream connection to {self.url}...")
                 self.is_listening = True
-                self._listen_task = asyncio.create_task(self.client.listen(self._distribute))
+                self._listen_task = asyncio.create_task(self._run_listen_safe())
             else:
                 print(f"[HUB] Multiplexing: Reusing existing connection to {self.url} for new subscriber.")
+
+    async def _run_listen_safe(self):
+        """Wrapper to ensure is_listening is reset if the task dies or is cancelled."""
+        try:
+            await self.client.listen(self._distribute)
+        except Exception as e:
+            print(f"[HUB ERROR] Upstream listen task for {self.url} failed: {e}")
+        finally:
+            async with self._lock:
+                print(f"[HUB] Connection loop for {self.url} has exited. Resetting state.")
+                self.is_listening = False
+                self._listen_task = None
 
     async def unsubscribe(self, callback: Callable[[str], Awaitable[None]]):
         """Unregisters a callback. Stops the upstream connection if no subscribers remain."""

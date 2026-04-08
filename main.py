@@ -51,6 +51,7 @@ def _prune_finished_compile_task(playbook_id: str) -> None:
 @app.get("/health")
 async def handle_health():
     """Simple health check endpoint."""
+    print(" [HEALTH] Engine received poke from heartbeat/probe.")
     return {"status": "healthy", "service": "rule-engine-orchestrator"}
 
 

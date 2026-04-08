@@ -279,35 +279,60 @@ async def run_market_engine(
     print(f" [MARKET] Connecting to {ws_url} via Hub...")
     evaluation_tick = 0
     
+    # Cache session-level data once to avoid per-tick HTTP spam.
+    session_history_cache = {
+        "history": {"trades": [], "side_flip": [], "stop_loss": []},
+        "event_history": [],
+        "session_start_time": None,
+        "last_refresh": 0
+    }
+    
+    if session_id:
+        print(f" [MARKET] Fetching initial session history for {session_id}...")
+        initial_replay = await fetch_backend_session_replay(session_id)
+        session_history_cache.update(build_session_history_context(initial_replay))
+        session_history_cache["last_refresh"] = asyncio.get_event_loop().time()
+
     hub = await MarketDataHub.get_instance(ws_url)
     
     async def market_handler(msg: str):
         nonlocal evaluation_tick
         try:
-            print(" [MARKET] -> Loading JSON message")
+            # print(" [MARKET] -> Loading JSON message") # Too noisy
             data = json.loads(msg)
             
             # Explicitly catch backend unauthorized JSON payloads pushed over an open socket.
             if isinstance(data, dict) and data.get("message") == "unauthorized.":
                  print(f" [MARKET ENGINE ERROR] Received explicit 'unauthorized.' payload from backend stream ({ws_url})")
-                 print(f"                       Full payload dumped: {data}")
                  return
 
-            print(" [MARKET] -> Extracting Base Context")
-            
             # 1. Build Base Context from the market payload, including nested metrics.
             market_context = flatten_market_payload(data)
             incoming_symbol = normalize_market_symbol(market_context.get("symbol"))
             if incoming_symbol != target_symbol:
-                print(f" [MARKET] -> Ignoring tick for {incoming_symbol}; waiting for {target_symbol}")
                 return
+
             if session_id:
-                replay_events = await fetch_backend_session_replay(session_id)
-                session_history = build_session_history_context(replay_events)
-                market_context.update(session_history)
+                # Periodic refresh of history (trades/stops) but not start_time
+                now = asyncio.get_event_loop().time()
+                if now - session_history_cache["last_refresh"] > 30.0:
+                    # We only refresh trades/stops, start_time is immutable once found
+                    latest_replay = await fetch_backend_session_replay(session_id)
+                    latest_history = build_session_history_context(latest_replay)
+                    session_history_cache["history"] = latest_history["history"]
+                    session_history_cache["event_history"] = latest_history["event_history"]
+                    if not session_history_cache["session_start_time"]:
+                        session_history_cache["session_start_time"] = latest_history["session_start_time"]
+                    session_history_cache["last_refresh"] = now
+
+                market_context.update({
+                    "history": session_history_cache["history"],
+                    "event_history": session_history_cache["event_history"],
+                    "session_start_time": session_history_cache["session_start_time"]
+                })
 
                 # Relative Session Timing Calculation
-                start_time_str = session_history.get("session_start_time")
+                start_time_str = session_history_cache["session_start_time"]
                 curr_time_val = market_context.get("current_time") or market_context.get("timestamp")
                 
                 if start_time_str and curr_time_val:
