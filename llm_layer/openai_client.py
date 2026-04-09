@@ -30,3 +30,17 @@ class OpenAILLMClient(LLMClient):
             temperature=0
         )
         return response.choices[0].message.content
+
+    def stream_chat(self, system_prompt: str, chat_history: list):
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(chat_history)
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0,
+            stream=True
+        )
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content

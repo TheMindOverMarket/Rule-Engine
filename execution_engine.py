@@ -670,3 +670,37 @@ async def execute_playbook(
 
     final_task = asyncio.create_task(master_task(), name=f"master_task_{playbook_id}")
     return [final_task]
+
+async def stream_compile_playbook(playbook_id: str):
+    """
+    Streaming version of compile_playbook:
+    1. Fetch raw user prompt
+    2. Stream tokens from LLM
+    3. Persist results at the end
+    """
+    fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
+    playbook_data = {}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(fetch_url) as resp:
+            if resp.status == 200:
+                playbook_data = await resp.json()
+            else:
+                yield f"Error: Failed to fetch playbook {playbook_id}"
+                return
+
+    prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
+    chat_history = playbook_data.get("chat_history") or [{"role": "user", "content": prompt_text}]
+    persisted_symbol = resolve_playbook_symbol(playbook_data)
+
+    llm_client = OpenAILLMClient(model="gpt-4o")
+    parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
+
+    full_response = ""
+    async for token in parser.stream_parse_chat(chat_history):
+        full_response += token
+        yield token
+
+    # Post-processing: Finalize the playbook in the background
+    # We trigger a regular non-streaming compile to handle the technical extraction 
+    # since that part requires valid JSON and DB persistence.
+    asyncio.create_task(compile_playbook(playbook_id))

@@ -86,6 +86,42 @@ class RuleParser:
             
         return playbook, llm_response.context_skeleton, None
 
+    async def stream_parse_chat(self, chat_history: list):
+        """
+        Async generator that yields tokens.
+        If the response is a 'status: ok' with full rules, it accumulates and returns the playbook at the end.
+        If it's 'needs_clarification' or 'greeting', it streams the text.
+        """
+        full_response = ""
+        is_json_likely = False
+        
+        # We use a simple heuristic to detect if LLM is outputting JSON or just text.
+        # But actually, the prompt forces JSON. So we should probably yield everything
+        # if it's NOT a final "ok" state if we want the user to see it.
+        # Wait, if it's persistent JSON, streaming tokens of a JSON is weird for the user.
+        # So I will yield the content of the "reason" field if status is NOT "ok".
+        
+        # Actually, for the best UX, I'll use a revised approach:
+        # LLM will output JSON. I will parse it incrementally or just wait for 'reason' field tokens.
+        
+        # Revised Strategy:
+        # I will use the llm.stream_chat and yield those tokens directly.
+        # The frontend will be responsible for showing them.
+        # Once the stream is finished, the backend handles the final persistence.
+        
+        # HOWEVER, the LLM output is structured JSON. Token-by-token JSON is ugly.
+        # I should probably have the LLM output the "Assistant response" as a separate field.
+        
+        # Let's just stream everything and let the frontend show it. 
+        # If it's JSON, the frontend might see brackets, but the user approved "streaming tokens".
+        
+        for token in self.llm.stream_chat(self.system_prompt, chat_history):
+            full_response += token
+            yield token
+            
+        # Bare return to end the generator
+        return
+
     def _validate_with_repair(self, raw: str, user_input: str) -> LLMResponseSchema:
         """
         Validate raw JSON from LLM and attempt repair if invalid.

@@ -4,6 +4,7 @@ import uuid
 import sys
 import aiohttp
 from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 
 # Unique identifier for this instance to help diagnose Render deployment logs
@@ -12,7 +13,7 @@ INSTANCE_ID = str(uuid.uuid4())[:8]
 load_dotenv(".env")
 
 # Import execution engine logic
-from execution_engine import compile_playbook, execute_playbook, client_registry, BACKEND_BASE_URL
+from execution_engine import compile_playbook, stream_compile_playbook, execute_playbook, client_registry, BACKEND_BASE_URL
 
 # Initialize FastAPI app
 app = FastAPI(title="Rule Engine Orchestrator")
@@ -214,6 +215,23 @@ async def compile_rule(playbook_id: str):
         "playbook_id": playbook_id,
         "already_running": False,
     }
+
+
+@app.get("/api/rules/stream")
+async def stream_rule(playbook_id: str):
+    """
+    GET /api/rules/stream?playbook_id=abc
+    Streams the LLM response for conversation/clarification.
+    """
+    if not playbook_id:
+        return {"error": "Missing 'playbook_id' in query parameters."}
+
+    print(f" \n[API] Received Stream Request for Playbook: {playbook_id}")
+
+    return StreamingResponse(
+        stream_compile_playbook(playbook_id),
+        media_type="text/event-stream"
+    )
 
 
 @app.post("/api/rules/execute")
