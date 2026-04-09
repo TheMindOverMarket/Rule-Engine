@@ -186,7 +186,7 @@ async def run_compile_in_background(playbook_id: str) -> None:
 
 
 @app.post("/api/rules/preview")
-async def preview_rule(turn: dict):
+async def preview_rule(turn: dict = Body(...)):
     """
     POST /api/rules/preview
     Stateless preview: Takes chat_history and returns structured logic.
@@ -236,7 +236,7 @@ async def compile_rule(playbook_id: str):
 
 @app.get("/api/rules/stream")
 @app.post("/api/rules/stream")
-async def stream_rule(playbook_id: Optional[str] = None, turn: Optional[dict] = None):
+async def stream_rule(playbook_id: Optional[str] = Query(None), turn: Optional[dict] = Body(None)):
     """
     GET/POST /api/rules/stream
     Streams the LLM response for conversation/clarification.
