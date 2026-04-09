@@ -80,27 +80,34 @@ async def heartbeat_loop():
             print(f" [HEARTBEAT ERROR] {e}")
 
 
-async def auto_recover_active_sessions():
+async def auto_recover_active_sessions(attempts: int = 3, delay_secs: int = 10):
     """
     On startup, query the backend for all sessions marked as STARTED
     and automatically re-initialize their execution engine tasks.
+    Retries on failure to handle transient backbone API unavailability.
     """
-    print(f" [LIFECYCLE] Initiating auto-recovery for active sessions...")
+    print(f" [LIFECYCLE] Initiating auto-recovery for active sessions (Attempt {4 - attempts}/3)...")
     sys.stdout.flush()
     
     # Wait a few seconds for networking to fully stabilize inside the container
-    await asyncio.sleep(2)
+    await asyncio.sleep(2 if attempts == 3 else delay_secs)
     
     sessions_url = f"{BACKEND_BASE_URL}/sessions"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(sessions_url, headers={"accept": "application/json"}) as resp:
                 if resp.status != 200:
-                    print(f" [LIFECYCLE ERROR] Failed to fetch sessions for recovery. Status: {resp.status}")
+                    err_body = await resp.text()
+                    print(f" [LIFECYCLE ERROR] Failed to fetch sessions. Status: {resp.status}")
+                    print(f" [LIFECYCLE DIAGNOSTIC] Response Body: {err_body[:500]}") # Only first 500 chars
+                    
+                    if attempts > 1 and resp.status >= 500:
+                        print(f" [LIFECYCLE] Transient backend error detected. Retrying in {delay_secs}s...")
+                        sys.stdout.flush()
+                        return await auto_recover_active_sessions(attempts - 1, delay_secs)
                     return
                 
                 all_sessions = await resp.json()
-                # Find sessions that are supposedly still running
                 active_sessions = [s for s in all_sessions if s.get("status") == "STARTED"]
                 
                 if not active_sessions:
@@ -117,15 +124,18 @@ async def auto_recover_active_sessions():
                         continue
                         
                     print(f" [LIFECYCLE] Recovering Playbook {playbook_id} for Session {session_id}...")
-                    # We reuse the logic in run_execute_in_background
-                    # but we call it directly here since we are already in an async task
                     await run_execute_in_background(playbook_id, session_id=session_id, user_id=user_id)
                     
                 print(f" [LIFECYCLE] Recovery completed.")
     except Exception as e:
-        print(f" [LIFECYCLE ERROR] Recovery failed: {e}")
+        print(f" [LIFECYCLE ERROR] Recovery failed with exception: {e}")
+        if attempts > 1:
+            print(f" [LIFECYCLE] Connection issue. Retrying in {delay_secs}s...")
+            sys.stdout.flush()
+            return await auto_recover_active_sessions(attempts - 1, delay_secs)
     finally:
         sys.stdout.flush()
+
 
 
 @app.get("/")
