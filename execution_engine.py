@@ -469,6 +469,19 @@ async def compile_playbook(playbook_id: str):
         playbook, context_skeleton, clarification_reason = await asyncio.to_thread(parser.parse_chat, chat_history)
 
         if clarification_reason:
+            print(f"[ENGINE] Response status check: {clarification_reason}")
+            
+            # Case A: Pure Greeting/Noise (Flagged with GREETING: prefix in parser)
+            if clarification_reason.startswith("GREETING:"):
+                clean_msg = clarification_reason.replace("GREETING:", "")
+                chat_history.append({"role": "assistant", "content": clean_msg})
+                await patch_backend_playbook(playbook_id, {
+                    "generation_status": "INITIALIZING",
+                    "chat_history": chat_history
+                })
+                return
+
+            # Case B: Standard Strategy Clarification
             print(f"[ENGINE] Needs clarification: {clarification_reason}")
             chat_history.append({"role": "assistant", "content": clarification_reason})
             await patch_backend_playbook(playbook_id, {

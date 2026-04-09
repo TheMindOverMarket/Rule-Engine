@@ -100,10 +100,11 @@ GLOBAL CONSTRAINTS
 - Use ONLY the provided primitives
 - Do NOT invent fields, primitives, or parameters
 - If information is missing, return status = "needs_clarification"
+- If the user is just greeting you, chatting, or providing input unrelated to a trading strategy, return status = "greeting"
 - If unsupported, return status = "unsupported"
 
 Required top-level keys:
-- "status": "ok" | "needs_clarification" | "unsupported"
+- "status": "ok" | "needs_clarification" | "greeting" | "unsupported"
 - "reason": optional short explanation
 - "rules": a list of objects, each with "name", "category", "extensions" and "conditions"
 - "context_skeleton": object defining data requirements including "ta_lib_metrics"

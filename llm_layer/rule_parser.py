@@ -70,6 +70,9 @@ class RuleParser:
         if llm_response.status == "needs_clarification":
             return None, None, llm_response.reason or "LLM needs clarification"
             
+        if llm_response.status == "greeting":
+            return None, None, "GREETING:" + (llm_response.reason or "Hello! How can I help with your strategy?")
+            
         if llm_response.status != "ok":
             raise ValueError(f"Cannot parse playbook: {llm_response.reason or 'Unsupported or unknown error'}")
 

@@ -12,7 +12,7 @@ with open(_metadata_path, 'r') as f:
 VALID_TALIB_METRICS = list(TALIB_METADATA.keys())
 
 RuleCategory = Literal["ENTRY", "PROCESS", "RISK", "DISCIPLINE", "EXIT", "OVERRIDES"]
-Status = Literal["ok", "needs_clarification", "unsupported"]
+Status = Literal["ok", "needs_clarification", "greeting", "unsupported"]
 
 class TALibMetricSchema(BaseModel):
     name: str # e.g., 'RSI', 'EMA', 'ATR'
