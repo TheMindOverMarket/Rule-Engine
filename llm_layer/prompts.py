@@ -105,7 +105,8 @@ GLOBAL CONSTRAINTS
 
 Required top-level keys:
 - "status": "ok" | "needs_clarification" | "greeting" | "unsupported"
-- "reason": optional short explanation
+- "reason": optional short explanation for internal logic/state.
+- "dialogue": (CRITICAL) The conversational part of your response. This is where you talk to the human, explain what you just did, ask for missing info, or greet them. Keep it professional, encouraging, and intelligent.
 - "rules": a list of objects, each with "name", "category", "extensions" and "conditions"
 - "context_skeleton": object defining data requirements including "ta_lib_metrics"
 

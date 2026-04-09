@@ -65,4 +65,5 @@ class LLMResponseSchema(BaseModel):
     rules: List[RuleSkeletonSchema] = Field(default_factory=list)
     context_skeleton: Optional[ContextSkeletonSchema] = Field(default=None)
     reason: Optional[str] = None
+    dialogue: Optional[str] = None
 

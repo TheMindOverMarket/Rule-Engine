@@ -671,36 +671,86 @@ async def execute_playbook(
     final_task = asyncio.create_task(master_task(), name=f"master_task_{playbook_id}")
     return [final_task]
 
-async def stream_compile_playbook(playbook_id: str):
+async def stream_compile_playbook(playbook_id: Optional[str] = None, chat_history: Optional[list] = None):
     """
     Streaming version of compile_playbook:
-    1. Fetch raw user prompt
+    1. Fetch raw user prompt (if playbook_id provided)
     2. Stream tokens from LLM
-    3. Persist results at the end
+    3. NO automatic persistence (to support manual approval workflow)
     """
-    fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
-    playbook_data = {}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(fetch_url) as resp:
-            if resp.status == 200:
-                playbook_data = await resp.json()
-            else:
-                yield f"Error: Failed to fetch playbook {playbook_id}"
-                return
-
-    prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
-    chat_history = playbook_data.get("chat_history") or [{"role": "user", "content": prompt_text}]
-    persisted_symbol = resolve_playbook_symbol(playbook_data)
+    if playbook_id:
+        fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
+        playbook_data = {}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(fetch_url) as resp:
+                if resp.status == 200:
+                    playbook_data = await resp.json()
+                else:
+                    yield f"Error: Failed to fetch playbook {playbook_id}"
+                    return
+        prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
+        chat_history = playbook_data.get("chat_history") or [{"role": "user", "content": prompt_text}]
+    
+    if not chat_history:
+        yield "Error: No chat history provided for streaming."
+        return
 
     llm_client = OpenAILLMClient(model="gpt-4o")
     parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
 
-    full_response = ""
     async for token in parser.stream_parse_chat(chat_history):
-        full_response += token
         yield token
 
-    # Post-processing: Finalize the playbook in the background
-    # We trigger a regular non-streaming compile to handle the technical extraction 
-    # since that part requires valid JSON and DB persistence.
-    asyncio.create_task(compile_playbook(playbook_id))
+async def preview_compile_playbook(chat_history: list) -> Dict[str, Any]:
+    """
+    Non-streaming preview:
+    1. Parse the chat history with LLM
+    2. Return the structured response without persisting to DB.
+    """
+    print(f"[ENGINE] Generating PREVIEW for chat history ({len(chat_history)} turns).")
+    llm_client = OpenAILLMClient(model="gpt-4o")
+    parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
+    
+    try:
+        # returns (playbook, context_skeleton, clarification_reason)
+        # But we actually want the raw LLMResponseSchema content for the frontend
+        # Let's adjust parser to expose the raw response if possible or reconstruct here.
+        # For now, we'll use a direct LLM call if needed, but parser.parse_chat is better.
+        playbook, context_skeleton, clarification_reason = await asyncio.to_thread(parser.parse_chat, chat_history)
+        
+        if clarification_reason:
+            status = "greeting" if clarification_reason.startswith("GREETING:") else "needs_clarification"
+            dialogue = clarification_reason.replace("GREETING:", "")
+            return {
+                "status": status,
+                "dialogue": dialogue,
+                "rules": [],
+                "context_skeleton": None
+            }
+
+        compiled_rules = []
+        for rule in playbook.rules:
+            compiled_rules.append({
+                "name": rule.name,
+                "category": rule.category.name,
+                "extensions": [
+                    {"id": ext.id, "primitive": ext.primitive_name, "params": ext.params}
+                    for ext in rule.extensions.values()
+                ],
+                "conditions": rule.conditions
+            })
+
+        return {
+            "status": "ok",
+            "dialogue": "I've structured your strategy logic below. Please review and confirm to deploy.",
+            "rules": compiled_rules,
+            "context_skeleton": context_skeleton.model_dump() if context_skeleton else None
+        }
+    except Exception as e:
+        print(f"[ENGINE ERROR] Preview failed: {e}")
+        return {
+            "status": "unsupported",
+            "dialogue": f"I encountered an error while parsing: {str(e)}",
+            "rules": [],
+            "context_skeleton": None
+        }

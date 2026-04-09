@@ -3,7 +3,8 @@ import asyncio
 import uuid
 import sys
 import aiohttp
-from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query, Body
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 
@@ -184,6 +185,22 @@ async def run_compile_in_background(playbook_id: str) -> None:
         active_compile_tasks.pop(playbook_id, None)
 
 
+@app.post("/api/rules/preview")
+async def preview_rule(turn: dict):
+    """
+    POST /api/rules/preview
+    Stateless preview: Takes chat_history and returns structured logic.
+    """
+    chat_history = turn.get("chat_history")
+    if not chat_history:
+        return {"error": "Missing 'chat_history' in request body."}
+
+    print(f" \n[API] Received Preview Request for Chat History")
+    from execution_engine import preview_compile_playbook
+    result = await preview_compile_playbook(chat_history)
+    return result
+
+
 @app.post("/api/rules/compile")
 async def compile_rule(playbook_id: str):
     """
@@ -218,18 +235,21 @@ async def compile_rule(playbook_id: str):
 
 
 @app.get("/api/rules/stream")
-async def stream_rule(playbook_id: str):
+@app.post("/api/rules/stream")
+async def stream_rule(playbook_id: Optional[str] = None, turn: Optional[dict] = None):
     """
-    GET /api/rules/stream?playbook_id=abc
+    GET/POST /api/rules/stream
     Streams the LLM response for conversation/clarification.
+    Supports both stateful (playbook_id) and stateless (chat_history via POST) flows.
     """
-    if not playbook_id:
-        return {"error": "Missing 'playbook_id' in query parameters."}
+    chat_history = None
+    if turn:
+        chat_history = turn.get("chat_history")
 
-    print(f" \n[API] Received Stream Request for Playbook: {playbook_id}")
+    print(f" \n[API] Received Stream Request (playbook_id: {playbook_id}, has_history: {bool(chat_history)})")
 
     return StreamingResponse(
-        stream_compile_playbook(playbook_id),
+        stream_compile_playbook(playbook_id=playbook_id, chat_history=chat_history),
         media_type="text/event-stream"
     )
 
