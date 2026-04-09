@@ -2,6 +2,7 @@ import os
 import asyncio
 import uuid
 import sys
+import aiohttp
 from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query
 from dotenv import load_dotenv
 
@@ -11,7 +12,7 @@ INSTANCE_ID = str(uuid.uuid4())[:8]
 load_dotenv(".env")
 
 # Import execution engine logic
-from execution_engine import compile_playbook, execute_playbook, client_registry
+from execution_engine import compile_playbook, execute_playbook, client_registry, BACKEND_BASE_URL
 
 # Initialize FastAPI app
 app = FastAPI(title="Rule Engine Orchestrator")
@@ -20,6 +21,10 @@ app = FastAPI(title="Rule Engine Orchestrator")
 async def startup_event():
     print(f" [LIFECYCLE] Rule Engine Instance {INSTANCE_ID} starting...")
     sys.stdout.flush()
+    # Trigger recovery of any sessions that were active before the restart
+    asyncio.create_task(auto_recover_active_sessions())
+    # Start internal heartbeat
+    asyncio.create_task(heartbeat_loop())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -61,6 +66,68 @@ def _prune_finished_compile_task(playbook_id: str) -> None:
         active_compile_tasks.pop(playbook_id, None)
 
 
+async def heartbeat_loop():
+    """Periodic pulse to keep the instance warm and event loop verified."""
+    print(f" [LIFECYCLE] Heartbeat loop started for instance {INSTANCE_ID}.")
+    while True:
+        try:
+            await asyncio.sleep(300) # Every 5 minutes
+            print(f" [HEARTBEAT] Instance {INSTANCE_ID} is alive. OS: {sys.platform}")
+            sys.stdout.flush()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f" [HEARTBEAT ERROR] {e}")
+
+
+async def auto_recover_active_sessions():
+    """
+    On startup, query the backend for all sessions marked as STARTED
+    and automatically re-initialize their execution engine tasks.
+    """
+    print(f" [LIFECYCLE] Initiating auto-recovery for active sessions...")
+    sys.stdout.flush()
+    
+    # Wait a few seconds for networking to fully stabilize inside the container
+    await asyncio.sleep(2)
+    
+    sessions_url = f"{BACKEND_BASE_URL}/sessions"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(sessions_url, headers={"accept": "application/json"}) as resp:
+                if resp.status != 200:
+                    print(f" [LIFECYCLE ERROR] Failed to fetch sessions for recovery. Status: {resp.status}")
+                    return
+                
+                all_sessions = await resp.json()
+                # Find sessions that are supposedly still running
+                active_sessions = [s for s in all_sessions if s.get("status") == "STARTED"]
+                
+                if not active_sessions:
+                    print(f" [LIFECYCLE] No active sessions found to recover.")
+                    return
+                
+                print(f" [LIFECYCLE] Found {len(active_sessions)} active sessions. Resuming...")
+                for sess in active_sessions:
+                    playbook_id = sess.get("playbook_id")
+                    session_id = sess.get("id")
+                    user_id = sess.get("user_id")
+                    
+                    if not playbook_id:
+                        continue
+                        
+                    print(f" [LIFECYCLE] Recovering Playbook {playbook_id} for Session {session_id}...")
+                    # We reuse the logic in run_execute_in_background
+                    # but we call it directly here since we are already in an async task
+                    await run_execute_in_background(playbook_id, session_id=session_id, user_id=user_id)
+                    
+                print(f" [LIFECYCLE] Recovery completed.")
+    except Exception as e:
+        print(f" [LIFECYCLE ERROR] Recovery failed: {e}")
+    finally:
+        sys.stdout.flush()
+
+
 @app.get("/")
 @app.get("/health")
 async def handle_health():
@@ -76,7 +143,6 @@ async def handle_health():
 
 async def run_execute_in_background(playbook_id: str, session_id: str | None = None, user_id: str | None = None):
     """Wrapper to run the playbook execute flow and capture the background tasks."""
-    import sys
     print(f" [API] Launching EXECUTE background task for session {session_id} and user {user_id}")
     sys.stdout.flush()
     
