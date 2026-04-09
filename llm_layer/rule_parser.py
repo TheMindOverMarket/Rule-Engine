@@ -55,6 +55,34 @@ class RuleParser:
         return playbook, context_skeleton
 
 
+    def parse_chat(self, chat_history: list) -> tuple['Playbook', 'ContextSkeletonSchema', str]:
+        """
+        Parse user input from a chat history. Returns (Playbook, ContextSkeletonSchema, clarification_reason)
+        """
+        user_input_preview = str(chat_history[-1]) if chat_history else ""
+        print(f"\n--- CALLING LLM WITH CHAT HISTORY ---\nLast message: {user_input_preview[:200]}...")
+        raw = self.llm.generate_chat(self.system_prompt, chat_history)
+        print(f"\n--- LLM RAW RESPONSE ---\n{raw}")
+        
+        user_input_str = "\n".join([f"{m.get('role', '').upper()}: {m.get('content', '')}" for m in chat_history])
+        llm_response = self._validate_with_repair(raw, user_input_str)
+
+        if llm_response.status == "needs_clarification":
+            return None, None, llm_response.reason or "LLM needs clarification"
+            
+        if llm_response.status != "ok":
+            raise ValueError(f"Cannot parse playbook: {llm_response.reason or 'Unsupported or unknown error'}")
+
+        from engine import Playbook, RuleCategory, RuleBlock
+        playbook = Playbook()
+        for rule_skeleton in llm_response.rules:
+            category_enum = RuleCategory[rule_skeleton.category]
+            skeleton_dict = rule_skeleton.dict()
+            rule_block = RuleBlock(category=category_enum, skeleton=skeleton_dict)
+            playbook.add_rule(rule_block)
+            
+        return playbook, llm_response.context_skeleton, None
+
     def _validate_with_repair(self, raw: str, user_input: str) -> LLMResponseSchema:
         """
         Validate raw JSON from LLM and attempt repair if invalid.

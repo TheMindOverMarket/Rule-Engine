@@ -463,9 +463,20 @@ async def compile_playbook(playbook_id: str):
     llm_client = OpenAILLMClient(model="gpt-4-turbo")
     parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
     
-    print(f"[ENGINE] Parsing rule playbook...")
+    print(f"[ENGINE] Parsing rule playbook via Chat...")
     try:
-        playbook, context_skeleton = await asyncio.to_thread(parser.parse, prompt_text)
+        chat_history = playbook_data.get("chat_history") or [{"role": "user", "content": prompt_text}]
+        playbook, context_skeleton, clarification_reason = await asyncio.to_thread(parser.parse_chat, chat_history)
+
+        if clarification_reason:
+            print(f"[ENGINE] Needs clarification: {clarification_reason}")
+            chat_history.append({"role": "assistant", "content": clarification_reason})
+            await patch_backend_playbook(playbook_id, {
+                "generation_status": "INCOMPLETE",
+                "chat_history": chat_history
+            })
+            return
+
         if context_skeleton is None:
             reason = "Parser returned no context skeleton."
             print(f"[ENGINE ERROR] {reason}")

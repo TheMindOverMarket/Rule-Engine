@@ -20,3 +20,13 @@ class OpenAILLMClient(LLMClient):
             temperature=0
         )
         return response.choices[0].message.content
+
+    def generate_chat(self, system_prompt: str, chat_history: list) -> str:
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(chat_history)
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0
+        )
+        return response.choices[0].message.content
