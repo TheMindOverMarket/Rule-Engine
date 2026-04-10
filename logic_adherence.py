@@ -251,14 +251,28 @@ def build_logic_adherence_payload(
 ) -> Dict[str, Any]:
     playbook_results = playbook.evaluate(context)
     entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
-
-    triggered_entry_ids = [
-        str(rule.id) if rule.id else rule.name
+    triggered_entry_rules = [
+        rule
         for rule in playbook.rules
         if rule.category == RuleCategory.ENTRY and (rule.id or rule.name) in entry_triggers
     ]
+
+    triggered_entry_ids = [
+        str(rule.id) if rule.id else rule.name
+        for rule in triggered_entry_rules
+    ]
     if not triggered_entry_ids and entry_triggers:
         triggered_entry_ids = [str(trigger) for trigger in entry_triggers]
+
+    inferred_side = None
+    for rule in triggered_entry_rules:
+        rule_name = rule.name.lower()
+        if "short" in rule_name or "sell" in rule_name:
+            inferred_side = "sell"
+            break
+        if "long" in rule_name or "buy" in rule_name:
+            inferred_side = "buy"
+            break
 
     rule_evaluations: Dict[str, bool] = {}
     rule_status: Dict[str, bool] = {}
@@ -288,6 +302,8 @@ def build_logic_adherence_payload(
     return {
         "timestamp": context.get("current_time") or context.get("timestamp"),
         "price": context.get("price"),
+        "symbol": context.get("symbol"),
+        "side": inferred_side,
         "playbook_id": playbook_id,
         "session_id": session_id,
         "user_id": user_id,
