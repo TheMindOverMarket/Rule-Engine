@@ -718,9 +718,9 @@ async def preview_compile_playbook(chat_history: list) -> Dict[str, Any]:
         # For now, we'll use a direct LLM call if needed, but parser.parse_chat is better.
         playbook, context_skeleton, clarification_reason = await asyncio.to_thread(parser.parse_chat, chat_history)
         
-        if clarification_reason:
-            status = "greeting" if clarification_reason.startswith("GREETING:") else "needs_clarification"
-            dialogue = clarification_reason.replace("GREETING:", "")
+        if playbook is None:
+            status = "greeting" if (clarification_reason and clarification_reason.startswith("GREETING:")) else "needs_clarification"
+            dialogue = clarification_reason.replace("GREETING:", "") if clarification_reason else "I need more details to clarify your strategy."
             return {
                 "status": status,
                 "dialogue": dialogue,
@@ -742,7 +742,7 @@ async def preview_compile_playbook(chat_history: list) -> Dict[str, Any]:
 
         return {
             "status": "ok",
-            "dialogue": "I've structured your strategy logic below. Please review and confirm to deploy.",
+            "dialogue": clarification_reason or "I've structured your strategy logic below. Please review and confirm to deploy.",
             "rules": compiled_rules,
             "context_skeleton": context_skeleton.model_dump() if context_skeleton else None
         }

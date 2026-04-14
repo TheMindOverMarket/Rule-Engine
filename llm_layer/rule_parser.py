@@ -68,10 +68,10 @@ class RuleParser:
         llm_response = self._validate_with_repair(raw, user_input_str)
 
         if llm_response.status == "needs_clarification":
-            return None, None, llm_response.reason or "LLM needs clarification"
+            return None, None, llm_response.dialogue or llm_response.reason or "I need more details to clarify your strategy."
             
         if llm_response.status == "greeting":
-            return None, None, "GREETING:" + (llm_response.reason or "Hello! How can I help with your strategy?")
+            return None, None, "GREETING:" + (llm_response.dialogue or llm_response.reason or "Hello! How can I help with your strategy?")
             
         if llm_response.status != "ok":
             raise ValueError(f"Cannot parse playbook: {llm_response.reason or 'Unsupported or unknown error'}")
@@ -84,7 +84,7 @@ class RuleParser:
             rule_block = RuleBlock(category=category_enum, skeleton=skeleton_dict)
             playbook.add_rule(rule_block)
             
-        return playbook, llm_response.context_skeleton, None
+        return playbook, llm_response.context_skeleton, llm_response.dialogue
 
     async def stream_parse_chat(self, chat_history: list):
         """
