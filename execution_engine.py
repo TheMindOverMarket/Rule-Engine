@@ -467,8 +467,10 @@ async def compile_playbook(playbook_id: str):
     try:
         chat_history = playbook_data.get("chat_history") or [{"role": "user", "content": prompt_text}]
         playbook, context_skeleton, clarification_reason = await asyncio.to_thread(parser.parse_chat, chat_history)
+        
+        clarification_reason = clarification_reason or ""
 
-        if clarification_reason:
+        if playbook is None:
             print(f"[ENGINE] Response status check: {clarification_reason}")
             
             # Case A: Pure Greeting/Noise (Flagged with GREETING: prefix in parser)
