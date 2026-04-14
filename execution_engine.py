@@ -695,7 +695,7 @@ async def stream_compile_playbook(playbook_id: Optional[str] = None, chat_histor
         yield "Error: No chat history provided for streaming."
         return
 
-    llm_client = OpenAILLMClient(model="gpt-4o")
+    llm_client = OpenAILLMClient(model="gpt-4o-mini")
     parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
 
     async for token in parser.stream_parse_chat(chat_history):
@@ -708,7 +708,7 @@ async def preview_compile_playbook(chat_history: list) -> Dict[str, Any]:
     2. Return the structured response without persisting to DB.
     """
     print(f"[ENGINE] Generating PREVIEW for chat history ({len(chat_history)} turns).")
-    llm_client = OpenAILLMClient(model="gpt-4o")
+    llm_client = OpenAILLMClient(model="gpt-4o-mini")
     parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
     
     try:

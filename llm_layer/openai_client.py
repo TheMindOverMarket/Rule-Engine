@@ -5,7 +5,7 @@ import os
 
 load_dotenv("../.env")
 class OpenAILLMClient(LLMClient):
-    def __init__(self, model: str = "gpt-4o"):
+    def __init__(self, model: str = "gpt-4o-mini"):
         self.client = OpenAI(api_key=os.getenv("OPENAI_KEY"))
         self.model = model
 
