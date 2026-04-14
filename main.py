@@ -82,19 +82,19 @@ async def heartbeat_loop():
             print(f" [HEARTBEAT ERROR] {e}")
 
 
-async def auto_recover_active_sessions(attempts: int = 3, delay_secs: int = 10):
+async def auto_recover_active_sessions(attempts: int = 8, delay_secs: int = 15):
     """
     On startup, query the backend for all sessions marked as STARTED
     and automatically re-initialize their execution engine tasks.
     Retries on failure to handle transient backbone API unavailability.
     """
-    print(f" [LIFECYCLE] Initiating auto-recovery for active sessions (Attempt {4 - attempts}/3)...")
+    print(f" [LIFECYCLE] Initiating auto-recovery for active sessions (Attempt {9 - attempts}/8)...")
     sys.stdout.flush()
     
     # Wait a few seconds for networking to fully stabilize inside the container
-    await asyncio.sleep(2 if attempts == 3 else delay_secs)
+    await asyncio.sleep(2 if attempts == 8 else delay_secs)
     
-    sessions_url = f"{BACKEND_BASE_URL}/sessions"
+    sessions_url = f"{BACKEND_BASE_URL}/sessions/"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(sessions_url, headers={"accept": "application/json"}) as resp:
