@@ -616,7 +616,7 @@ async def execute_playbook(
         global_account_fields=GLOBAL_ACCOUNT_FIELDS
     )
 
-    user_ws_url = build_backend_ws_url("/ws/user-activity", user_id=user_id)
+    user_ws_url = build_backend_ws_url("/ws/user-activity", user_id=user_id, session_id=session_id)
     market_ws_url = build_backend_ws_url("/ws/market-state", user_id=user_id)
     
     user_hub = await MarketDataHub.get_instance(user_ws_url)
