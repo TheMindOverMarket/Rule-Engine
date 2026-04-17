@@ -272,7 +272,8 @@ def account_comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]
     # if it's int/float, leave it as is.
 
 
-    account_value = float(account[field])
+    raw_val = account[field]
+    account_value = float(raw_val) if raw_val is not None else 0.0
 
     if op == ">":
         return account_value > value
