@@ -200,6 +200,29 @@ async def preview_rule(turn: dict = Body(...)):
     result = await preview_compile_playbook(chat_history)
     return result
 
+@app.post("/api/rules/explain_deviation")
+async def explain_deviation(payload: dict = Body(...)):
+    """
+    POST /api/rules/explain_deviation
+    Takes Playbook Text and Event Data, returns an LLM-generated explanation.
+    """
+    playbook_text = payload.get("playbook_text")
+    event_data = payload.get("event_data")
+    if not playbook_text or not event_data:
+        return {"error": "Missing playbook_text or event_data in payload"}
+
+    from llm_layer.openai_client import OpenAILLMClient
+    from llm_layer.reasoner import DeviationReasoner
+    import asyncio
+
+    llm_client = OpenAILLMClient(model="gpt-4o-mini")
+    reasoner = DeviationReasoner(llm_client)
+
+    # Offload LLM call to async thread to unblock fastApi loop
+    reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, event_data)
+    
+    return {"status": "success", "reasoning": reasoning}
+
 
 @app.post("/api/rules/compile")
 async def compile_rule(playbook_id: str):
