@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Optional, Set
 
@@ -51,6 +52,7 @@ class EngineState:
     
     # Persistence for action-based deviations
     last_action_deviation_data: Optional[Dict[str, Any]] = None
+    last_action_deviation_time: float = 0.0
     last_logged_order_id: Optional[str] = None
     last_logged_state_deviation_ids: Set[str] = field(default_factory=set)
 
@@ -341,6 +343,7 @@ def build_logic_adherence_payload(
             "price": context.get("price"),
             "side": state.last_side or inferred_side or "buy"
         }
+        state.last_action_deviation_time = time.time()
         print(f" [DEVIATION DETECTED] Action-based deviation recorded at {state.last_action_deviation_data['timestamp']} for rules: {state.last_action_deviation_data['rule']}")
     
     # If there is NO current deviation, but we have a "last action deviation",
@@ -368,6 +371,18 @@ def build_logic_adherence_payload(
         print(f" [DEVIATION CLEARED] State-based deviation resolved: {list(state.last_logged_state_deviation_ids)}")
         state.last_logged_state_deviation_ids.clear()
 
+    # Sticky Clearing Logic
+    MAX_STICKY_SECONDS = 5.0
+    if state.last_action_deviation_data:
+        # A: Time-based expiry
+        if (time.time() - state.last_action_deviation_time) > MAX_STICKY_SECONDS:
+            print(f" [STICKY EXPIRED] Clearing sticky deviation after {MAX_STICKY_SECONDS}s")
+            state.last_action_deviation_data = None
+        # B: User took a NEW action that was COMPLIANT (reset the sticker)
+        elif user_action_bool and not overall_deviation:
+            print(f" [STICKY RESET] User took a compliant action. Clearing old deviation sticker.")
+            state.last_action_deviation_data = None
+
     if not overall_deviation and state.last_action_deviation_data:
         # We "stick" the last action deviation if it's the most recent interesting thing.
         # This prevents the race condition where the deviation disappears on the next tick.
@@ -377,9 +392,14 @@ def build_logic_adherence_payload(
         
         # Merge sticky data into current payload
         sticky = state.last_action_deviation_data
-        rule_evaluations = sticky["rule_evaluations"]
-        deviation_true = sticky["deviation_true"]
-        deviation_false = sticky["deviation_false"]
+        
+        # IMPORTANT: We keep the CURRENT rule_status and rule_evaluations so the "Live Feed"
+        # still shows the current market state vs rules, but we flag the row as a deviation.
+        # This allows the user to see "Adherences" come through while the deviation is still visible.
+        
+        # Use sticky rule summary for clarity
+        rule_summary = f"[Past Action Dev] {sticky['rule']}"
+        
         print(f" [STICKY BROADCAST] No current deviation, but persisting last action deviation to UI: {sticky['rule']}")
     
     accumulated_deviation = state.record_deviation(overall_deviation)
