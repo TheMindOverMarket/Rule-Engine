@@ -364,6 +364,7 @@ async def run_market_engine(
                     "session_start_time": session_history_cache["session_start_time"]
                 })
 
+                # 1.5 Temporal Integrity Check
                 # Relative Session Timing Calculation
                 start_time_str = session_history_cache["session_start_time"]
                 curr_time_val = market_context.get("current_time") or market_context.get("timestamp")
@@ -381,11 +382,16 @@ async def run_market_engine(
                         start_dt = to_dt(start_time_str)
                         curr_dt = to_dt(curr_time_val)
                         
+                        # ROOT CAUSE FIX: Discard ticks from before the session started
+                        if curr_dt < start_dt:
+                            print(f" [ENGINE][MARKET] Discarding stale tick from {curr_dt} (Session started at {start_dt})")
+                            return
+
                         delta = curr_dt - start_dt
                         market_context["minutes_since_start"] = delta.total_seconds() / 60.0
                         market_context["session_start_time_abs"] = start_time_str
                     except Exception as e:
-                        print(f" [ENGINE WARNING] Failed to compute minutes_since_start: {e}")
+                        print(f" [ENGINE WARNING] Failed temporal check/delta calculation: {e}")
 
             # 2. Hydrate Full Context (fetches account data if needed)
             full_context = context_builder.hydrate(
