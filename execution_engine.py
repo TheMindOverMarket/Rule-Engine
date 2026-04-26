@@ -320,16 +320,17 @@ async def user_activity_handler(msg_or_dict: Union[str, Dict[str, Any]], state: 
              return
 
         # 🚀 TRACKING USER ACTION 🚀
-        # Alpaca events have 'alpaca_event_type' in our normalized backend stream.
         # We only treat fills or explicit 'new' events as the "moment of intent".
+        # Ignore system messages, cancellations, or heartbeats.
         event_type = data.get("alpaca_event_type")
         if event_type in ("new", "fill", "partial_fill"):
             state.user_took_action = True
             state.last_order_id = data.get("order_id")
-            print(f" [USER ACTION DETECTED] Action recorded. Order ID: {state.last_order_id}")
+            state.last_side = data.get("side")
+            print(f" [USER ACTION DETECTED] Action recorded. Order ID: {state.last_order_id}, Side: {state.last_side}")
         else:
-            print(f" [USER ACTION] Manual override detected (non-fill event): {data}")
-            state.user_took_action = True
+            # Explicitly do NOT set user_took_action for other noise (canceled, replaced, heartbeats)
+            pass
     except Exception as e:
         print(f" [USER STREAM ERROR] {e}")
 

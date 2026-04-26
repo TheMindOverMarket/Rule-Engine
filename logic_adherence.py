@@ -47,7 +47,7 @@ class EngineState:
     user_took_action: bool = False
     accumulated_deviation: int = 0
     last_order_id: Optional[str] = None
-
+    last_side: Optional[str] = None
 
     def consume_user_action(self) -> bool:
         acted = self.user_took_action
@@ -305,7 +305,7 @@ def build_logic_adherence_payload(
         "timestamp": context.get("current_time") or context.get("timestamp"),
         "price": context.get("price"),
         "symbol": context.get("symbol"),
-        "side": inferred_side,
+        "side": state.last_side or inferred_side or "buy",
         "playbook_id": playbook_id,
         "session_id": session_id,
         "user_id": user_id,
