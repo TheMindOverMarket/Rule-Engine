@@ -246,14 +246,19 @@ class EngineOutputRegistry:
 
     async def broadcast(self, payload: Dict[str, Any], user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
         async with self._lock:
-            if session_id:
-                targets = list(self._session_clients.get(session_id, []))
-            elif user_id:
-                targets = list(self._user_clients.get(user_id, []))
-            else:
-                targets = list(self._global_clients)
+            # Aggregate all valid targets
+            targets = set(self._global_clients)
+            
+            if session_id and session_id in self._session_clients:
+                targets.update(self._session_clients[session_id])
+            if user_id and user_id in self._user_clients:
+                targets.update(self._user_clients[user_id])
 
-            for websocket in targets:
+            if not targets:
+                # Optional: Log that we are broadcasting to empty void
+                return
+
+            for websocket in list(targets):
                 try:
                     await websocket.send_json(payload)
                 except Exception:
@@ -371,7 +376,7 @@ async def run_market_engine(
                 
                 if start_time_str and curr_time_val:
                     try:
-                        from datetime import datetime, timezone
+                        from datetime import datetime, timezone, timedelta
                         def to_dt(ts):
                             if isinstance(ts, (int, float)):
                                 return datetime.fromtimestamp(ts, tz=timezone.utc)
@@ -382,9 +387,10 @@ async def run_market_engine(
                         start_dt = to_dt(start_time_str)
                         curr_dt = to_dt(curr_time_val)
                         
-                        # ROOT CAUSE FIX: Discard ticks from before the session started
-                        if curr_dt < start_dt:
-                            print(f" [ENGINE][MARKET] Discarding stale tick from {curr_dt} (Session started at {start_dt})")
+                        # ROOT CAUSE FIX: Allow ticks from the last 24 hours to handle clock sync issues
+                        # while still discarding genuinely ancient data.
+                        if curr_dt < (start_dt - timedelta(hours=24)):
+                            print(f" [ENGINE][MARKET] Discarding genuinely stale tick from {curr_dt} (Too old relative to session)")
                             return
 
                         delta = curr_dt - start_dt

@@ -5,6 +5,7 @@ import sys
 import aiohttp
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 
@@ -18,6 +19,13 @@ from execution_engine import compile_playbook, stream_compile_playbook, execute_
 
 # Initialize FastAPI app
 app = FastAPI(title="Rule Engine Orchestrator")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():
@@ -338,10 +346,10 @@ async def execute_rule(
     }
 
 
-@app.get("/api/rules/stop")
+@app.post("/api/rules/stop")
 async def stop_playbook(playbook_id: str):
     """
-    GET /api/rules/stop?playbook_id=abc
+    POST /api/rules/stop?playbook_id=abc
     Triggered by the frontend to stop active evaluating strategies.
     """
     if not playbook_id:
@@ -369,7 +377,11 @@ async def websocket_handler(websocket: WebSocket):
     user_id = websocket.query_params.get("user_id")
     session_id = websocket.query_params.get("session_id")
 
-    print(f" [WEBSOCKET] Engine Result Viewer Connected (user:{user_id}, session:{session_id})")
+    # Guard against stringified "undefined" or "null" from some frontend hooks
+    if user_id in (None, "", "undefined", "null"): user_id = None
+    if session_id in (None, "", "undefined", "null"): session_id = None
+
+    print(f" [WEBSOCKET] Engine Result Viewer Connected | session_id: {session_id} | user_id: {user_id}")
     await client_registry.connect(websocket, user_id=user_id, session_id=session_id)
     
     try:
