@@ -182,11 +182,12 @@ CONTEXT SKELETON (DATA REQUIREMENTS)
 --------------------
 You must explicitly list all data required to evaluate the rule.
 - "symbol": The trading pair or ticker symbol if specified (e.g. "ASSET/USD", "AAPL").
-- "market_data": List specific raw market indicators needed. MUST be EXACT matches from the provided `MARKET_DATA_FIELDS` list.
+- "market_data": List specific raw market indicators needed. MUST be EXACT matches from the provided `MARKET_DATA_FIELDS` list. If none are needed, emit an empty array `[]`. Do NOT omit the key!
 - "ta_lib_metrics": List technical indicators needed. Each must be an object with:
     - `name`: string representing the TA-Lib function. You MUST use EXACTLY one of the keys from the TA-Lib documentation object below.
     - `timeperiod`: integer if specified (e.g., 14 for RSI(14)). Null if not specified.
     - `params`: object with additional params if needed, mapped exactly as required by the documentation object below.
+    If the strategy does NOT rely on technical indicators, you MUST emit an empty array `[]`. Do NOT omit the key!
 
 --------------------
 TA-LIB CAPABILITIES DOCUMENTATION
