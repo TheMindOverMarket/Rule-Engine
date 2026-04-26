@@ -21,8 +21,15 @@ from engine import Playbook, RuleCategory, ContextBuilder
 from llm_layer.schemas import ContextSkeletonSchema
 from llm_layer.openai_client import OpenAILLMClient
 from llm_layer.rule_parser import RuleParser
+from llm_layer.reasoner import DeviationReasoner
 
 register_default_primitives()
+
+# Global cache for playbook text to support real-time deviation reasoning
+playbook_text_cache: Dict[str, str] = {}
+llm_client = OpenAILLMClient(model="gpt-4o-mini")
+reasoner = DeviationReasoner(llm_client)
+
 
 # Load environment variables
 load_dotenv(".env")
@@ -114,14 +121,31 @@ async def persistence_worker():
             persistence_queue.task_done()
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            print(f" [PERSISTENCE ERROR] Worker encountered error: {e}")
-            await asyncio.sleep(1) # Cooldown on error
+        except Exception as exc:
+            print(f"[ENGINE WARNING] Persistence exception for {session_id}: {exc}")
 
 async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: Optional[int] = None):
     """Internal helper to actually send the data."""
     event_url = build_backend_http_url(f"/sessions/{session_id}/events")
     event_type = "DEVIATION" if payload.get("deviation") else "ADHERENCE"
+    
+    # 🚀 AUTOMATED AI REASONING (if deviation)
+    if event_type == "DEVIATION":
+        playbook_id = payload.get("playbook_id")
+        playbook_text = playbook_text_cache.get(playbook_id) if playbook_id else None
+        
+        if playbook_text:
+            print(f" [REASONING] Generating AI explanation for deviation in session {session_id}...")
+            # We use to_thread to avoid blocking the persistence worker, although it processes sequentially anyway
+            try:
+                reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, payload)
+                payload["ai_reasoning"] = reasoning
+                print(f" [REASONING] Explanation generated: {reasoning}")
+            except Exception as e:
+                print(f" [REASONING ERROR] Failed to generate reasoning: {e}")
+        else:
+            print(f" [REASONING WARNING] No playbook text found in cache for ID {playbook_id}. Skipping explanation.")
+
     event_payload = {
         "type": event_type,
         "timestamp": payload.get("timestamp"),
@@ -133,6 +157,7 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
             "signal_type": event_type.lower(),
         },
     }
+
 
     try:
         async with await HTTPClient.post(
@@ -610,6 +635,10 @@ async def execute_playbook(
                 # Priority: 1. API Parameter, 2. Database Record
                 effective_user_id = user_id or data.get("user_id")
                 print(f" [ENGINE] Resolved execute user_id: {effective_user_id} (API: {user_id}, DB: {data.get('user_id')})")
+                
+                # Cache playbook text for reasoning
+                playbook_text_cache[playbook_id] = data.get("original_nl_input") or data.get("rule_text", "")
+                
                 print(f" [ENGINE] Resolved execute symbol: {resolved_symbol}")
                 user_id = effective_user_id
             else:
