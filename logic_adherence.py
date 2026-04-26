@@ -46,6 +46,8 @@ def register_default_primitives() -> None:
 class EngineState:
     user_took_action: bool = False
     accumulated_deviation: int = 0
+    last_order_id: Optional[str] = None
+
 
     def consume_user_action(self) -> bool:
         acted = self.user_took_action
@@ -313,8 +315,10 @@ def build_logic_adherence_payload(
         "rule_evaluations": rule_evaluations,
         "rule_status": rule_status,
         "action": user_action_bool,
+        "order_id": getattr(state, "last_order_id", None),
         "deviation": overall_deviation,
         "deviation_true": deviation_true,
         "deviation_false": deviation_false,
         "accumulated_deviation": accumulated_deviation,
     }
+

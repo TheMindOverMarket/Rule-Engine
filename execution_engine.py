@@ -141,6 +141,10 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
                 reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, payload)
                 payload["ai_reasoning"] = reasoning
                 print(f" [REASONING] Explanation generated: {reasoning}")
+                
+                # 🚀 RE-BROADCAST with finalized reasoning for real-time UI updates
+                user_id = payload.get("user_id")
+                await output_registry.broadcast(payload, user_id=user_id, session_id=session_id)
             except Exception as e:
                 print(f" [REASONING ERROR] Failed to generate reasoning: {e}")
         else:
@@ -314,9 +318,18 @@ async def user_activity_handler(msg_or_dict: Union[str, Dict[str, Any]], state: 
              print(f" [USER STREAM ERROR] Received explicit 'unauthorized.' payload from backend stream")
              print(f"                     Full payload dumped: {data}")
              return
-             
-        print(f" [USER ACTION] Manual override detected: {data}")
-        state.user_took_action = True
+
+        # 🚀 TRACKING USER ACTION 🚀
+        # Alpaca events have 'alpaca_event_type' in our normalized backend stream.
+        # We only treat fills or explicit 'new' events as the "moment of intent".
+        event_type = data.get("alpaca_event_type")
+        if event_type in ("new", "fill", "partial_fill"):
+            state.user_took_action = True
+            state.last_order_id = data.get("order_id")
+            print(f" [USER ACTION DETECTED] Action recorded. Order ID: {state.last_order_id}")
+        else:
+            print(f" [USER ACTION] Manual override detected (non-fill event): {data}")
+            state.user_took_action = True
     except Exception as e:
         print(f" [USER STREAM ERROR] {e}")
 
@@ -446,6 +459,10 @@ async def run_market_engine(
                 user_id=user_id,
             )
             
+            # 🚀 REAL-TIME AI REASONING STATUS 🚀
+            if output_payload.get('deviation'):
+                output_payload['ai_reasoning'] = "GENERATING..."
+
             evaluation_tick += 1
             
             # Log Throttling: only log every 10 ticks, or on significant events (trigger/deviation)
