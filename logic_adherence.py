@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Optional, Set
 
@@ -251,16 +252,16 @@ def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bo
     # These are ONLY violated if an action was taken.
     if cat_name in {"ENTRY", "PROCESS"}:
         is_dev = user_action_bool and not rule_is_true
-        return is_dev, "Action-Dev" if is_dev else None
+        return is_dev, "ACTION" if is_dev else None
 
     # RISK / DISCIPLINE / EXIT / OVERRIDES act like active violations or constraints.
     if cat_name in {"RISK", "DISCIPLINE", "EXIT", "OVERRIDES"}:
         is_violating = _constraint_rule_is_deviation(rule, rule_is_true)
         if _is_action_gated_constraint(rule):
             is_dev = user_action_bool and is_violating
-            return is_dev, "Action-Dev" if is_dev else None
+            return is_dev, "ACTION" if is_dev else None
         
-        return is_violating, "State-Dev" if is_violating else None
+        return is_violating, "STATE" if is_violating else None
 
     return False, None
 
@@ -316,10 +317,10 @@ def build_logic_adherence_payload(
             deviation_true.append(rule_identifier)
             # State based deviations take priority as "current state"
             # Action based deviations are tagged as such
-            if dev_type == "State-Dev":
-                current_deviation_type = "State-Dev"
+            if dev_type == "STATE":
+                current_deviation_type = "STATE"
             elif not current_deviation_type:
-                current_deviation_type = "Action-Dev"
+                current_deviation_type = "ACTION"
         else:
             deviation_false.append(rule_identifier)
         
@@ -330,8 +331,9 @@ def build_logic_adherence_payload(
     overall_deviation = bool(deviation_true)
     
     # 🚀 PERSISTENCE LOGIC 🚀
-    # If we have an action-based deviation, save it.
-    if overall_deviation and current_deviation_type == "Action-Dev":
+    # If we have an action-based deviation, we can still record it in state for AI reasoning or other filters,
+    # but we no longer "stick" it to future ticks.
+    if overall_deviation and current_deviation_type == "ACTION":
         state.last_action_deviation_data = {
             "rule": ", ".join(deviation_true),
             "triggered_entries": triggered_entry_ids,
@@ -344,7 +346,7 @@ def build_logic_adherence_payload(
             "side": state.last_side or inferred_side or "buy"
         }
         state.last_action_deviation_time = time.time()
-        print(f" [DEVIATION DETECTED] Action-based deviation recorded at {state.last_action_deviation_data['timestamp']} for rules: {state.last_action_deviation_data['rule']}")
+        print(f" [DEVIATION DETECTED] ACTION deviation recorded: {state.last_action_deviation_data['rule']}")
     
     # If there is NO current deviation, but we have a "last action deviation",
     # we can choose to keep showing it in the payload so the UI doesn't blink.
@@ -354,14 +356,14 @@ def build_logic_adherence_payload(
     is_new_event = False
     
     if overall_deviation:
-        if current_deviation_type == "Action-Dev":
+        if current_deviation_type == "ACTION":
             # Only mark as new if we haven't logged this specific order yet
-            if state.last_order_id and state.last_order_id != state.last_logged_order_id:
+            # Fallback: if order_id is None (rare for action-dev), we still mark as new if it just started
+            if (state.last_order_id and state.last_order_id != state.last_logged_order_id) or (not state.last_order_id and not state.last_logged_order_id):
                 is_new_event = True
-                state.last_logged_order_id = state.last_order_id
-        elif current_deviation_type == "State-Dev":
-            # Only mark as new if the set of violating rules has changed or we haven't logged state deviations recently
-            # For simplicity, we'll just log whenever a new rule ID enters the deviation set
+                state.last_logged_order_id = state.last_order_id or "untracked_action"
+        elif current_deviation_type == "STATE":
+            # Only mark as new if the set of violating rules has changed
             new_ids = set(deviation_true) - state.last_logged_state_deviation_ids
             if new_ids:
                 is_new_event = True
@@ -371,42 +373,25 @@ def build_logic_adherence_payload(
         print(f" [DEVIATION CLEARED] State-based deviation resolved: {list(state.last_logged_state_deviation_ids)}")
         state.last_logged_state_deviation_ids.clear()
 
-    # Sticky Clearing Logic
-    MAX_STICKY_SECONDS = 5.0
-    if state.last_action_deviation_data:
-        # A: Time-based expiry
-        if (time.time() - state.last_action_deviation_time) > MAX_STICKY_SECONDS:
-            print(f" [STICKY EXPIRED] Clearing sticky deviation after {MAX_STICKY_SECONDS}s")
-            state.last_action_deviation_data = None
-        # B: User took a NEW action that was COMPLIANT (reset the sticker)
-        elif user_action_bool and not overall_deviation:
-            print(f" [STICKY RESET] User took a compliant action. Clearing old deviation sticker.")
-            state.last_action_deviation_data = None
-
-    if not overall_deviation and state.last_action_deviation_data:
-        # We "stick" the last action deviation if it's the most recent interesting thing.
-        # This prevents the race condition where the deviation disappears on the next tick.
-        effective_deviation = True
-        effective_deviation_type = "Action-Dev"
-        is_new_event = False # Sticky deviations are NEVER new events for persistence
-        
-        # Merge sticky data into current payload
-        sticky = state.last_action_deviation_data
-        
-        # IMPORTANT: We keep the CURRENT rule_status and rule_evaluations so the "Live Feed"
-        # still shows the current market state vs rules, but we flag the row as a deviation.
-        # This allows the user to see "Adherences" come through while the deviation is still visible.
-        
-        # Use sticky rule summary for clarity
-        rule_summary = f"[Past Action Dev] {sticky['rule']}"
-        
-        print(f" [STICKY BROADCAST] No current deviation, but persisting last action deviation to UI: {sticky['rule']}")
+    # We NO LONGER "stick" deviations to future ticks. 
+    # Each row in the live feed will represent the actual state of that tick.
+    # Deviations stay in the feed indefinitely because the UI appends them to the history.
+    
+    effective_deviation = overall_deviation
+    effective_deviation_type = current_deviation_type
+    
+    if overall_deviation:
+        rule_summary = current_deviation_type # "ACTION" or "STATE"
+    else:
+        rule_summary = "ADHERENCE"
+    
+    # Refresh timestamp manually for the UI feed to ensure it clicks forward
+    fresh_timestamp = datetime.now(timezone.utc).isoformat()
     
     accumulated_deviation = state.record_deviation(overall_deviation)
-    rule_summary = ", ".join(deviation_true) if deviation_true else "No rule violation"
 
     return {
-        "timestamp": context.get("current_time") or context.get("timestamp"),
+        "timestamp": fresh_timestamp,
         "price": context.get("price"),
         "symbol": context.get("symbol"),
         "side": state.last_side or inferred_side or "buy",
