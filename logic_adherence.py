@@ -84,6 +84,11 @@ def flatten_market_payload(data: Dict[str, Any]) -> Dict[str, Any]:
             for metric_name, metric_value in timeframe_metrics.items():
                 flattened_key = metric_name if timeframe == "1m" else f"{metric_name}_{timeframe}"
                 flattened.setdefault(flattened_key, metric_value)
+                
+                # Suffix Fallback: If metric is 'RSI_14', also allow it to be found via 'RSI' and vice-versa
+                if "_" in flattened_key:
+                    base_m = flattened_key.rsplit("_", 1)[0]
+                    flattened.setdefault(base_m, metric_value)
 
     if "current_time" not in flattened and "timestamp" in flattened:
         flattened["current_time"] = flattened["timestamp"]
@@ -188,8 +193,9 @@ def _is_action_gated_constraint(rule: RuleBlock) -> bool:
     Determines if a constraint restricts ACTIONS (thus requiring user_action_bool to deviate)
     or restricts STATE (triggering continuous deviation if held).
     """
-    if rule.category == RuleCategory.EXIT:
-        return False
+    cat_name = rule.category.name if hasattr(rule.category, "name") else str(rule.category)
+    if cat_name in {"ENTRY", "EXIT", "PROCESS"}:
+        return True
 
     if not rule.extensions:
         return True
@@ -228,18 +234,20 @@ def _evaluate_rule_permission(rule: RuleBlock, rule_is_true: bool) -> bool:
 
 
 def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bool: bool) -> bool:
+    cat_name = rule.category.name if hasattr(rule.category, "name") else str(rule.category)
+    
     # ENTRY / PROCESS rules describe the action the trader should have taken.
-    if rule.category in ENTRY_LIKE_CATEGORIES:
+    if cat_name in {"ENTRY", "PROCESS"}:
         return user_action_bool and not rule_is_true
 
     # RISK / DISCIPLINE / EXIT / OVERRIDES act like active violations or constraints.
-    if rule.category in CONSTRAINT_CATEGORIES:
+    if cat_name in {"RISK", "DISCIPLINE", "EXIT", "OVERRIDES"}:
         is_violating = _constraint_rule_is_deviation(rule, rule_is_true)
         if _is_action_gated_constraint(rule):
             return user_action_bool and is_violating
         return is_violating
 
-    return rule_is_true != user_action_bool
+    return False
 
 
 def build_logic_adherence_payload(

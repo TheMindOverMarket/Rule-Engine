@@ -144,7 +144,7 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
                 
                 # 🚀 RE-BROADCAST with finalized reasoning for real-time UI updates
                 user_id = payload.get("user_id")
-                await output_registry.broadcast(payload, user_id=user_id, session_id=session_id)
+                await client_registry.broadcast(payload, user_id=user_id, session_id=session_id)
             except Exception as e:
                 print(f" [REASONING ERROR] Failed to generate reasoning: {e}")
         else:
@@ -478,7 +478,7 @@ async def run_market_engine(
                     f"DEV: {str(output_payload['deviation'])}"
                 )
             
-            await output_registry.broadcast(output_payload, user_id=user_id, session_id=session_id)
+            await client_registry.broadcast(output_payload, user_id=user_id, session_id=session_id)
 
             if session_id:
                 # Fire and forget persistence via size-limited queue
