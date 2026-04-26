@@ -341,6 +341,7 @@ def build_logic_adherence_payload(
             "price": context.get("price"),
             "side": state.last_side or inferred_side or "buy"
         }
+        print(f" [DEVIATION DETECTED] Action-based deviation recorded at {state.last_action_deviation_data['timestamp']} for rules: {state.last_action_deviation_data['rule']}")
     
     # If there is NO current deviation, but we have a "last action deviation",
     # we can choose to keep showing it in the payload so the UI doesn't blink.
@@ -362,6 +363,10 @@ def build_logic_adherence_payload(
             if new_ids:
                 is_new_event = True
                 state.last_logged_state_deviation_ids.update(new_ids)
+        
+    elif state.last_logged_state_deviation_ids:
+        print(f" [DEVIATION CLEARED] State-based deviation resolved: {list(state.last_logged_state_deviation_ids)}")
+        state.last_logged_state_deviation_ids.clear()
 
     if not overall_deviation and state.last_action_deviation_data:
         # We "stick" the last action deviation if it's the most recent interesting thing.
@@ -375,6 +380,7 @@ def build_logic_adherence_payload(
         rule_evaluations = sticky["rule_evaluations"]
         deviation_true = sticky["deviation_true"]
         deviation_false = sticky["deviation_false"]
+        print(f" [STICKY BROADCAST] No current deviation, but persisting last action deviation to UI: {sticky['rule']}")
     
     accumulated_deviation = state.record_deviation(overall_deviation)
     rule_summary = ", ".join(deviation_true) if deviation_true else "No rule violation"

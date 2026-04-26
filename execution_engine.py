@@ -485,6 +485,9 @@ async def run_market_engine(
                     f"DEV: {str(output_payload['deviation'])}"
                 )
             
+            if output_payload.get("deviation"):
+                print(f" [UI BROADCAST] Sending deviation state to frontend. Type: {output_payload.get('deviation_type')}, Tick: {evaluation_tick}")
+            
             await client_registry.broadcast(output_payload, user_id=user_id, session_id=session_id)
 
             if session_id:
