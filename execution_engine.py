@@ -134,24 +134,29 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
         event_type = "ADHERENCE"
     
     # 🚀 AUTOMATED AI REASONING (if deviation) 
-    # Only generate and persist if this is a NEW event to avoid database spam
+    # Move reasoning to a separate background task to avoid blocking the persistence worker and the main loop.
     if event_type == "DEVIATION" and payload.get("is_new_event"):
         playbook_id = payload.get("playbook_id")
         playbook_text = playbook_text_cache.get(playbook_id) if playbook_id else None
         
         if playbook_text:
-            print(f" [REASONING] Generating AI explanation for deviation in session {session_id}...")
-            # We use to_thread to avoid blocking the persistence worker, although it processes sequentially anyway
-            try:
-                reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, payload)
-                payload["ai_reasoning"] = reasoning
-                print(f" [REASONING] Explanation generated: {reasoning}")
-                
-                # 🚀 RE-BROADCAST with finalized reasoning for real-time UI updates
-                user_id = payload.get("user_id")
-                await client_registry.broadcast(payload, user_id=user_id, session_id=session_id)
-            except Exception as e:
-                print(f" [REASONING ERROR] Failed to generate reasoning: {e}")
+            async def run_reasoning_and_rebroadcast():
+                try:
+                    print(f" [REASONING] Generating AI explanation for deviation in session {session_id}...")
+                    # Clone payload to avoid concurrent modification issues
+                    local_payload = dict(payload)
+                    reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, local_payload)
+                    local_payload["ai_reasoning"] = reasoning
+                    print(f" [REASONING] Explanation generated: {reasoning}")
+                    
+                    # 🚀 RE-BROADCAST with finalized reasoning for real-time UI updates
+                    user_id = local_payload.get("user_id")
+                    await client_registry.broadcast(local_payload, user_id=user_id, session_id=session_id)
+                except Exception as e:
+                    print(f" [REASONING ERROR] Failed to generate reasoning: {e}")
+
+            # Fire and forget reasoning task
+            asyncio.create_task(run_reasoning_and_rebroadcast())
         else:
             print(f" [REASONING WARNING] No playbook text found in cache for ID {playbook_id}. Skipping explanation.")
 
