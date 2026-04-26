@@ -124,11 +124,11 @@ RULE BLOCKS AND NAMING
 RULE CATEGORIES
 --------------------
 You must split the strategy into appropriate categories:
-- "ENTRY": Logic for opening a position.
-- "EXIT": Logic for closing a position (Take Profit/Stop Loss).
-- "RISK": Hard constraints (Max loss, position size).
-- "DISCIPLINE": Psychological/meta rules (Cooldowns, max trades).
-- "OVERRIDES": Manual override conditions.
+- "ENTRY": Logic for opening a new position (Long or Short).
+- "EXIT": Logic for closing an existing active position (Take Profit, Stop Loss, or signal-based closing). A "Sell" instruction is an EXIT if it closes a long position, but an ENTRY if it opens a short position.
+- "RISK": Hard constraints that prevent taking ANY action (Max loss, position size).
+- "DISCIPLINE": Psychological/meta rules that restrict trading frequency or timing.
+- "OVERRIDES": Conditions for manual intervention.
 
 
 --------------------

@@ -130,7 +130,8 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
     event_type = "DEVIATION" if payload.get("deviation") else "ADHERENCE"
     
     # 🚀 AUTOMATED AI REASONING (if deviation)
-    if event_type == "DEVIATION":
+    # Only generate and persist if this is a NEW event to avoid database spam
+    if event_type == "DEVIATION" and payload.get("is_new_event"):
         playbook_id = payload.get("playbook_id")
         playbook_text = playbook_text_cache.get(playbook_id) if playbook_id else None
         
@@ -161,7 +162,13 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
             "signal_type": event_type.lower(),
         },
     }
-
+    
+    # Only post to backend if it's a new deviation or a standard adherence tick (e.g. every 60 ticks)
+    # This prevents the database from being flooded by "sticky" deviation broadcasts.
+    should_persist = payload.get("is_new_event") or (tick and tick % 60 == 0)
+    
+    if not should_persist:
+        return
 
     try:
         async with await HTTPClient.post(
