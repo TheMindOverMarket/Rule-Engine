@@ -229,6 +229,30 @@ async def explain_deviation(payload: dict = Body(...)):
     return {"status": "success", "reasoning": reasoning}
 
 
+@app.post("/api/rules/session_report_card")
+async def generate_report_card(payload: dict = Body(...)):
+    """
+    POST /api/rules/session_report_card
+    Takes Playbook Text and ALL Session Events, returns a structured Report Card.
+    """
+    playbook_text = payload.get("playbook_text")
+    events = payload.get("events")
+    if not playbook_text or events is None:
+        return {"error": "Missing playbook_text or events in payload"}
+
+    from llm_layer.openai_client import OpenAILLMClient
+    from llm_layer.reasoner import DeviationReasoner
+    import asyncio
+
+    llm_client = OpenAILLMClient(model="gpt-4o-mini")
+    reasoner = DeviationReasoner(llm_client)
+
+    # Offload LLM call to async thread
+    report_card = await asyncio.to_thread(reasoner.generate_session_report_card, playbook_text, events)
+    
+    return {"status": "success", "report_card": report_card}
+
+
 @app.post("/api/rules/compile")
 async def compile_rule(playbook_id: str):
     """
