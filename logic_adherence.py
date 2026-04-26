@@ -404,7 +404,7 @@ def build_logic_adherence_payload(
         "rule_evaluations": rule_evaluations,
         "rule_status": rule_status,
         "action": user_action_bool,
-        "order_id": getattr(state, "last_order_id", None),
+        "order_id": getattr(state, "last_order_id", None) if user_action_bool else None,
         "deviation": effective_deviation,
         "deviation_type": effective_deviation_type,
         "is_new_event": is_new_event,
