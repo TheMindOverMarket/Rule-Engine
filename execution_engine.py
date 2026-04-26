@@ -630,11 +630,7 @@ async def execute_playbook(
     context_skeleton = ContextSkeletonSchema(**safe_context_data)
 
     # 3. Spin up trading engine loops
-    alpaca_provider = AlpacaAccountProvider(
-        api_key=os.getenv("API_KEY"),
-        api_secret=os.getenv("SECRET_KEY"),
-        paper=True
-    )
+    alpaca_provider = AlpacaAccountProvider(paper=True)
     
     context_builder = ContextBuilder(
         account_provider=alpaca_provider,
