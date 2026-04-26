@@ -133,33 +133,6 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
     else:
         event_type = "ADHERENCE"
     
-    # 🚀 AUTOMATED AI REASONING (if deviation) 
-    # Move reasoning to a separate background task to avoid blocking the persistence worker and the main loop.
-    if event_type == "DEVIATION" and payload.get("is_new_event"):
-        playbook_id = payload.get("playbook_id")
-        playbook_text = playbook_text_cache.get(playbook_id) if playbook_id else None
-        
-        if playbook_text:
-            async def run_reasoning_and_rebroadcast():
-                try:
-                    print(f" [REASONING] Generating AI explanation for deviation in session {session_id}...")
-                    # Clone payload to avoid concurrent modification issues
-                    local_payload = dict(payload)
-                    reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, local_payload)
-                    local_payload["ai_reasoning"] = reasoning
-                    print(f" [REASONING] Explanation generated: {reasoning}")
-                    
-                    # 🚀 RE-BROADCAST with finalized reasoning for real-time UI updates
-                    user_id = local_payload.get("user_id")
-                    await client_registry.broadcast(local_payload, user_id=user_id, session_id=session_id)
-                except Exception as e:
-                    print(f" [REASONING ERROR] Failed to generate reasoning: {e}")
-
-            # Fire and forget reasoning task
-            asyncio.create_task(run_reasoning_and_rebroadcast())
-        else:
-            print(f" [REASONING WARNING] No playbook text found in cache for ID {playbook_id}. Skipping explanation.")
-
     event_payload = {
         "type": event_type,
         "timestamp": payload.get("timestamp"),
@@ -172,10 +145,7 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
         },
     }
     
-    # Only post to backend if it's a new deviation or a standard adherence tick (e.g. every 60 ticks)
-    # This prevents the database from being flooded by "sticky" deviation broadcasts.
     should_persist = payload.get("is_new_event") or (tick and tick % 60 == 0)
-    
     if not should_persist:
         return
 
@@ -186,11 +156,52 @@ async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: O
             headers={"accept": "application/json"},
             timeout=10
         ) as response:
-            if response.status not in (200, 201):
+            if response.status in (200, 201):
+                data = await response.json()
+                event_id = data.get("id")
+                
+                # 🚀 AUTOMATED AI REASONING (if deviation) 
+                if event_type == "DEVIATION" and payload.get("is_new_event"):
+                    playbook_id = payload.get("playbook_id")
+                    playbook_text = playbook_text_cache.get(playbook_id) if playbook_id else None
+                    
+                    if playbook_text:
+                        async def run_reasoning_and_rebroadcast(evt_id: str):
+                            try:
+                                print(f" [REASONING] Generating AI explanation for deviation {evt_id}...")
+                                local_payload = dict(payload)
+                                reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, local_payload)
+                                local_payload["ai_reasoning"] = reasoning
+                                print(f" [REASONING] Explanation generated: {reasoning}")
+                                
+                                # 1. Update UI (Broadcast)
+                                user_id = local_payload.get("user_id")
+                                await client_registry.broadcast(local_payload, user_id=user_id, session_id=session_id)
+                                
+                                # 2. Update DB (PATCH)
+                                update_url = build_backend_http_url(f"/sessions/events/{evt_id}")
+                                async with await HTTPClient.patch(
+                                    update_url,
+                                    json={"event_data": {"ai_reasoning": reasoning}},
+                                    headers={"accept": "application/json"},
+                                    timeout=10
+                                ) as patch_resp:
+                                    if patch_resp.status in (200, 201, 204):
+                                        print(f" [REASONING] Successfully persisted reasoning to DB for event {evt_id}")
+                                    else:
+                                        p_text = await patch_resp.text()
+                                        print(f" [REASONING ERROR] DB update failed for {evt_id}: {p_text}")
+                                        
+                            except Exception as e:
+                                print(f" [REASONING ERROR] Failed to generate/persist reasoning: {e}")
+
+                        asyncio.create_task(run_reasoning_and_rebroadcast(event_id))
+            else:
                 err_text = await response.text()
                 print(f"[ENGINE WARNING] Persistence failed (Status {response.status}): {err_text}")
     except Exception as exc:
         print(f"[ENGINE WARNING] Persistence exception for {session_id}: {exc}")
+
 
 async def persist_backend_session_signal(
     session_id: str,
