@@ -249,16 +249,16 @@ def _classify_rule_deviation(rule: RuleBlock, rule_is_true: bool, user_action_bo
     # These are ONLY violated if an action was taken.
     if cat_name in {"ENTRY", "PROCESS"}:
         is_dev = user_action_bool and not rule_is_true
-        return is_dev, "action" if is_dev else None
+        return is_dev, "Action-Dev" if is_dev else None
 
     # RISK / DISCIPLINE / EXIT / OVERRIDES act like active violations or constraints.
     if cat_name in {"RISK", "DISCIPLINE", "EXIT", "OVERRIDES"}:
         is_violating = _constraint_rule_is_deviation(rule, rule_is_true)
         if _is_action_gated_constraint(rule):
             is_dev = user_action_bool and is_violating
-            return is_dev, "action" if is_dev else None
+            return is_dev, "Action-Dev" if is_dev else None
         
-        return is_violating, "state" if is_violating else None
+        return is_violating, "State-Dev" if is_violating else None
 
     return False, None
 
@@ -314,10 +314,10 @@ def build_logic_adherence_payload(
             deviation_true.append(rule_identifier)
             # State based deviations take priority as "current state"
             # Action based deviations are tagged as such
-            if dev_type == "state":
-                current_deviation_type = "state"
+            if dev_type == "State-Dev":
+                current_deviation_type = "State-Dev"
             elif not current_deviation_type:
-                current_deviation_type = "action"
+                current_deviation_type = "Action-Dev"
         else:
             deviation_false.append(rule_identifier)
         
@@ -329,7 +329,7 @@ def build_logic_adherence_payload(
     
     # 🚀 PERSISTENCE LOGIC 🚀
     # If we have an action-based deviation, save it.
-    if overall_deviation and current_deviation_type == "action":
+    if overall_deviation and current_deviation_type == "Action-Dev":
         state.last_action_deviation_data = {
             "rule": ", ".join(deviation_true),
             "triggered_entries": triggered_entry_ids,
@@ -351,12 +351,12 @@ def build_logic_adherence_payload(
     is_new_event = False
     
     if overall_deviation:
-        if current_deviation_type == "action":
+        if current_deviation_type == "Action-Dev":
             # Only mark as new if we haven't logged this specific order yet
             if state.last_order_id and state.last_order_id != state.last_logged_order_id:
                 is_new_event = True
                 state.last_logged_order_id = state.last_order_id
-        elif current_deviation_type == "state":
+        elif current_deviation_type == "State-Dev":
             # Only mark as new if the set of violating rules has changed or we haven't logged state deviations recently
             # For simplicity, we'll just log whenever a new rule ID enters the deviation set
             new_ids = set(deviation_true) - state.last_logged_state_deviation_ids
@@ -372,7 +372,7 @@ def build_logic_adherence_payload(
         # We "stick" the last action deviation if it's the most recent interesting thing.
         # This prevents the race condition where the deviation disappears on the next tick.
         effective_deviation = True
-        effective_deviation_type = "action"
+        effective_deviation_type = "Action-Dev"
         is_new_event = False # Sticky deviations are NEVER new events for persistence
         
         # Merge sticky data into current payload

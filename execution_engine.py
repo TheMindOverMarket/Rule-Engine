@@ -127,11 +127,17 @@ async def persistence_worker():
 async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: Optional[int] = None):
     """Internal helper to actually send the data."""
     event_url = build_backend_http_url(f"/sessions/{session_id}/events")
-    event_type = "DEVIATION" if payload.get("deviation") else "ADHERENCE"
+    dev_type = payload.get("deviation_type")
+    if dev_type == "Action-Dev":
+        event_type = "TRADE_DEVIATION"
+    elif dev_type == "State-Dev":
+        event_type = "STATE_DEVIATION"
+    else:
+        event_type = "ADHERENCE"
     
-    # 🚀 AUTOMATED AI REASONING (if deviation)
+    # 🚀 AUTOMATED AI REASONING (if deviation) 
     # Only generate and persist if this is a NEW event to avoid database spam
-    if event_type == "DEVIATION" and payload.get("is_new_event"):
+    if (event_type in ("TRADE_DEVIATION", "STATE_DEVIATION")) and payload.get("is_new_event"):
         playbook_id = payload.get("playbook_id")
         playbook_text = playbook_text_cache.get(playbook_id) if playbook_id else None
         
