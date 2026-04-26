@@ -275,12 +275,15 @@ client_registry = EngineOutputRegistry()
 GLOBAL_ACCOUNT_FIELDS = ["equity", "buying_power", "cash", "daytrade_count", "open_positions"]
 
 
-async def user_activity_handler(msg: str, state: EngineState):
+async def user_activity_handler(msg_or_dict: Union[str, Dict[str, Any]], state: EngineState):
     """
     Listens to the manual user-activity stream (e.g. click "Buy", "Sell", "Close").
     """
     try:
-        data = json.loads(msg)
+        if isinstance(msg_or_dict, str):
+            data = json.loads(msg_or_dict)
+        else:
+            data = msg_or_dict
         
         if isinstance(data, dict) and data.get("message") == "unauthorized.":
              print(f" [USER STREAM ERROR] Received explicit 'unauthorized.' payload from backend stream")
