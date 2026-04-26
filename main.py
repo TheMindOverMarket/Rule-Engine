@@ -31,6 +31,8 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     print(f" [LIFECYCLE] Rule Engine Instance {INSTANCE_ID} shutting down...")
+    from network.http_client import HTTPClient
+    await HTTPClient.close()
     sys.stdout.flush()
 
 # Keep track of active background tasks per playbook so start/stop only affect
@@ -127,6 +129,9 @@ async def auto_recover_active_sessions(attempts: int = 8, delay_secs: int = 15):
                         
                     print(f" [LIFECYCLE] Recovering Playbook {playbook_id} for Session {session_id}...")
                     await run_execute_in_background(playbook_id, session_id=session_id, user_id=user_id)
+                    
+                    # Stagger recovery to avoid thundering herd on backend WebSockets
+                    await asyncio.sleep(0.5)
                     
                 print(f" [LIFECYCLE] Recovery completed.")
     except Exception as e:

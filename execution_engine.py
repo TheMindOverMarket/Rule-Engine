@@ -1,9 +1,9 @@
 import os
 import json
 import asyncio
-import aiohttp
+from network.http_client import HTTPClient
 from collections import defaultdict
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, Union
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dotenv import load_dotenv
 
@@ -97,11 +97,29 @@ def ensure_context_symbol(context: Dict[str, Any], symbol: str) -> Dict[str, Any
     return synced_context
 
 
-async def persist_backend_session_signal(
-    session_id: str,
-    payload: Dict[str, Any],
-    tick: Optional[int] = None,
-) -> bool:
+# Global persistence queue to prevent OOM from task accumulation
+persistence_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+persistence_worker_task: Optional[asyncio.Task] = None
+
+async def persistence_worker():
+    """
+    Background worker that processes the persistence queue sequentially.
+    This prevents thousands of simultaneous HTTP requests to the backend.
+    """
+    print(" [PERSISTENCE] Worker started.")
+    while True:
+        try:
+            session_id, payload, tick = await persistence_queue.get()
+            await _perform_persistence(session_id, payload, tick)
+            persistence_queue.task_done()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f" [PERSISTENCE ERROR] Worker encountered error: {e}")
+            await asyncio.sleep(1) # Cooldown on error
+
+async def _perform_persistence(session_id: str, payload: Dict[str, Any], tick: Optional[int] = None):
+    """Internal helper to actually send the data."""
     event_url = build_backend_http_url(f"/sessions/{session_id}/events")
     event_type = "DEVIATION" if payload.get("deviation") else "ADHERENCE"
     event_payload = {
@@ -116,70 +134,83 @@ async def persist_backend_session_signal(
         },
     }
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(
-                event_url,
-                json=event_payload,
-                headers={"accept": "application/json"},
-            ) as response:
-                if response.status in (200, 201):
-                    return True
-
+    try:
+        async with await HTTPClient.post(
+            event_url,
+            json=event_payload,
+            headers={"accept": "application/json"},
+            timeout=10
+        ) as response:
+            if response.status not in (200, 201):
                 err_text = await response.text()
-                print(
-                    f"[ENGINE WARNING] Failed to persist session signal. "
-                    f"Status: {response.status}, Response: {err_text}"
-                )
-                return False
-        except Exception as exc:
-            print(f"[ENGINE WARNING] Could not persist session signal: {exc}")
-            return False
+                print(f"[ENGINE WARNING] Persistence failed (Status {response.status}): {err_text}")
+    except Exception as exc:
+        print(f"[ENGINE WARNING] Persistence exception for {session_id}: {exc}")
+
+async def persist_backend_session_signal(
+    session_id: str,
+    payload: Dict[str, Any],
+    tick: Optional[int] = None,
+) -> None:
+    """
+    Enqueues a signal for persistence. Drops if the queue is full to protect memory.
+    """
+    global persistence_worker_task
+    if persistence_worker_task is None or persistence_worker_task.done():
+        persistence_worker_task = asyncio.create_task(persistence_worker())
+
+    try:
+        # Non-blocking put. If queue is full, we drop the signal to save memory.
+        # It's better to lose one telemetry tick than to crash the service.
+        persistence_queue.put_nowait((session_id, payload, tick))
+    except asyncio.QueueFull:
+        # If we are dropping signals, it means the backend is too slow or traffic is too high.
+        # We only log this occasionally to avoid log-spamming.
+        if tick and tick % 100 == 0:
+            print(f" [ENGINE WARNING] Persistence queue full ({persistence_queue.qsize()}). Dropping tick {tick} for {session_id}.")
 
 
 async def fetch_backend_session_replay(session_id: str) -> list[dict[str, Any]]:
     replay_url = build_backend_http_url(f"/sessions/{session_id}/replay")
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(
-                replay_url,
-                headers={"accept": "application/json"},
-            ) as response:
-                if response.status == 200:
-                    payload = await response.json()
-                    if isinstance(payload, list):
-                        return payload
+    try:
+        async with await HTTPClient.get(
+            replay_url,
+            headers={"accept": "application/json"},
+        ) as response:
+            if response.status == 200:
+                payload = await response.json()
+                if isinstance(payload, list):
+                    return payload
 
-                err_text = await response.text()
-                print(
-                    f"[ENGINE WARNING] Failed to fetch session replay. "
-                    f"Status: {response.status}, Response: {err_text}"
-                )
-                return []
-        except Exception as exc:
-            print(f"[ENGINE WARNING] Could not fetch session replay: {exc}")
+            err_text = await response.text()
+            print(
+                f"[ENGINE WARNING] Failed to fetch session replay. "
+                f"Status: {response.status}, Response: {err_text}"
+            )
             return []
+    except Exception as exc:
+        print(f"[ENGINE WARNING] Could not fetch session replay: {exc}")
+        return []
 
 
 async def patch_backend_playbook(playbook_id: str, payload: Dict[str, Any]) -> bool:
     patch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.patch(
-                patch_url,
-                json=payload,
-                headers={"accept": "application/json"},
-            ) as patch_resp:
-                if patch_resp.status in (200, 201, 204):
-                    return True
+    try:
+        async with await HTTPClient.patch(
+            patch_url,
+            json=payload,
+            headers={"accept": "application/json"},
+        ) as patch_resp:
+            if patch_resp.status in (200, 201, 204):
+                return True
 
-                err_text = await patch_resp.text()
-                print(f"[ENGINE WARNING] Failed to patch playbook. Status: {patch_resp.status}, Response: {err_text}")
-                return False
-        except Exception as exc:
-            print(f"[ENGINE WARNING] Could not patch playbook: {exc}")
+            err_text = await patch_resp.text()
+            print(f"[ENGINE WARNING] Failed to patch playbook. Status: {patch_resp.status}, Response: {err_text}")
             return False
+    except Exception as exc:
+        print(f"[ENGINE WARNING] Could not patch playbook: {exc}")
+        return False
 
 
 class EngineOutputRegistry:
@@ -295,11 +326,13 @@ async def run_market_engine(
 
     hub = await MarketDataHub.get_instance(ws_url)
     
-    async def market_handler(msg: str):
+    async def market_handler(msg_or_dict: Union[str, Dict[str, Any]]):
         nonlocal evaluation_tick
         try:
-            # print(" [MARKET] -> Loading JSON message") # Too noisy
-            data = json.loads(msg)
+            if isinstance(msg_or_dict, str):
+                data = json.loads(msg_or_dict)
+            else:
+                data = msg_or_dict
             
             # Explicitly catch backend unauthorized JSON payloads pushed over an open socket.
             if isinstance(data, dict) and data.get("message") == "unauthorized.":
@@ -354,22 +387,15 @@ async def run_market_engine(
                     except Exception as e:
                         print(f" [ENGINE WARNING] Failed to compute minutes_since_start: {e}")
 
-            print(" [MARKET] -> Hydrating Full Context")
-            
             # 2. Hydrate Full Context (fetches account data if needed)
             full_context = context_builder.hydrate(
                 base_context=market_context, 
                 context_skeleton=context_skeleton
             )
 
-            print(" [MARKET] -> Evaluating Playbook")
-            
-            print(" [MARKET] -> Checking User Action")
-            
             # 3. User Action & Payload
             user_action_bool = await state.get_and_reset_user_action()
 
-            print(" [MARKET] -> Preparing Output Payload")
             output_payload = build_logic_adherence_payload(
                 playbook=playbook,
                 context=full_context,
@@ -380,22 +406,24 @@ async def run_market_engine(
                 user_id=user_id,
             )
             
-            price_display = output_payload["price"] if output_payload["price"] is not None else "N/A"
-            print(
-                f"TIME: {output_payload['timestamp']} | "
-                f"PRICE: {str(price_display):<8} | "
-                f"RULE: {str(output_payload['rule_triggered']):<5} | "
-                f"TRIGGERS: {output_payload['triggered_entries']} | "
-                f"ACTION: {str(user_action_bool):<5} | "
-                f"DEVIATION: {str(output_payload['deviation'])}"
-            )
-            
-            print(" [MARKET] -> Broadcasting Payload")
-
             evaluation_tick += 1
+            
+            # Log Throttling: only log every 10 ticks, or on significant events (trigger/deviation)
+            should_log = (evaluation_tick % 10 == 0) or output_payload['rule_triggered'] or output_payload['deviation']
+            if should_log:
+                price_display = output_payload["price"] if output_payload["price"] is not None else "N/A"
+                print(
+                    f"[{target_symbol}] TICK: {evaluation_tick:>5} | "
+                    f"PRICE: {str(price_display):<8} | "
+                    f"TRIG: {str(output_payload['rule_triggered']):<5} | "
+                    f"ACT: {str(user_action_bool):<5} | "
+                    f"DEV: {str(output_payload['deviation'])}"
+                )
+            
             await output_registry.broadcast(output_payload, user_id=user_id, session_id=session_id)
 
             if session_id:
+                # Fire and forget persistence via size-limited queue
                 await persist_backend_session_signal(
                     session_id=session_id,
                     payload=output_payload,
@@ -434,20 +462,19 @@ async def compile_playbook(playbook_id: str):
     persisted_symbol = ""
     playbook_data: Dict[str, Any] = {}
     
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
-                if resp.status == 200:
-                    playbook_data = await resp.json()
-                    persisted_symbol = resolve_playbook_symbol(playbook_data)
-                    prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
-                    print(f"[ENGINE] Successfully fetched prompt ({len(prompt_text)} chars).")
-                else:
-                    print(f"[ENGINE ERROR] Failed to fetch playbook from Supabase. Status: {resp.status}")
-                    return
-        except Exception as e:
-            print(f"[ENGINE ERROR] Could not reach Supabase to fetch playbook: {e}")
-            return
+    try:
+        async with await HTTPClient.get(fetch_url, headers={"accept": "application/json"}) as resp:
+            if resp.status == 200:
+                playbook_data = await resp.json()
+                persisted_symbol = resolve_playbook_symbol(playbook_data)
+                prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
+                print(f"[ENGINE] Successfully fetched prompt ({len(prompt_text)} chars).")
+            else:
+                print(f"[ENGINE ERROR] Failed to fetch playbook from Supabase. Status: {resp.status}")
+                return
+    except Exception as e:
+        print(f"[ENGINE ERROR] Could not reach Supabase to fetch playbook: {e}")
+        return
             
     if not prompt_text:
         print("[ENGINE ERROR] Prompt text is empty. Cannot compile engine.")
@@ -560,23 +587,22 @@ async def execute_playbook(
 
     fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
     resolved_symbol = ""
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    resolved_symbol = resolve_playbook_symbol(data)
-                    # Priority: 1. API Parameter, 2. Database Record
-                    effective_user_id = user_id or data.get("user_id")
-                    print(f" [ENGINE] Resolved execute user_id: {effective_user_id} (API: {user_id}, DB: {data.get('user_id')})")
-                    print(f" [ENGINE] Resolved execute symbol: {resolved_symbol}")
-                    user_id = effective_user_id
-                else:
-                    print(f"[ENGINE ERROR] Failed to fetch playbook to execute. Status: {resp.status}")
-                    return None
-        except Exception as e:
-            print(f"[ENGINE ERROR] Could not reach Supabase for execute: {e}")
-            return None
+    try:
+        async with await HTTPClient.get(fetch_url, headers={"accept": "application/json"}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                resolved_symbol = resolve_playbook_symbol(data)
+                # Priority: 1. API Parameter, 2. Database Record
+                effective_user_id = user_id or data.get("user_id")
+                print(f" [ENGINE] Resolved execute user_id: {effective_user_id} (API: {user_id}, DB: {data.get('user_id')})")
+                print(f" [ENGINE] Resolved execute symbol: {resolved_symbol}")
+                user_id = effective_user_id
+            else:
+                print(f"[ENGINE ERROR] Failed to fetch playbook to execute. Status: {resp.status}")
+                return None
+    except Exception as e:
+        print(f"[ENGINE ERROR] Could not reach Supabase for execute: {e}")
+        return None
 
     if not resolved_symbol:
         print("[ENGINE ERROR] Playbook missing market symbol. Execution cannot start.")
@@ -683,13 +709,12 @@ async def stream_compile_playbook(playbook_id: Optional[str] = None, chat_histor
     if playbook_id:
         fetch_url = build_backend_http_url(f"/playbooks/{playbook_id}")
         playbook_data = {}
-        async with aiohttp.ClientSession() as session:
-            async with session.get(fetch_url) as resp:
-                if resp.status == 200:
-                    playbook_data = await resp.json()
-                else:
-                    yield f"Error: Failed to fetch playbook {playbook_id}"
-                    return
+        async with await HTTPClient.get(fetch_url) as resp:
+            if resp.status == 200:
+                playbook_data = await resp.json()
+            else:
+                yield f"Error: Failed to fetch playbook {playbook_id}"
+                return
         prompt_text = playbook_data.get("original_nl_input") or playbook_data.get("rule_text", "")
         chat_history = playbook_data.get("chat_history") or [{"role": "user", "content": prompt_text}]
     

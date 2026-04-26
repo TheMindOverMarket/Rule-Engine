@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 from typing import Dict, Set, Callable, Awaitable, Optional
 from network.websocket_client import WebSocketClient
 
@@ -39,6 +40,10 @@ class MarketDataHub:
     async def _run_listen_safe(self):
         """Wrapper to ensure is_listening is reset if the task dies or is cancelled."""
         try:
+            # Staggered start to avoid thundering herd across different Hub instances
+            stagger = random.uniform(0.1, 2.0)
+            await asyncio.sleep(stagger)
+            
             await self.client.listen(self._distribute)
         except Exception as e:
             print(f"[HUB ERROR] Upstream listen task for {self.url} failed: {e}")
@@ -54,30 +59,42 @@ class MarketDataHub:
             if callback in self.subscribers:
                 self.subscribers.remove(callback)
             
-            if not self.subscribers and self.is_listening:
-                if self._listen_task:
-                    self._listen_task.cancel()
-                    try:
-                        await self._listen_task
-                    except asyncio.CancelledError:
-                        pass
-                self.is_listening = False
-                self._listen_task = None
-                # Optional: We could also close the underlying connection if needed
+            if not self.subscribers:
+                if self.is_listening:
+                    if self._listen_task:
+                        self._listen_task.cancel()
+                        try:
+                            await self._listen_task
+                        except asyncio.CancelledError:
+                            pass
+                    self.is_listening = False
+                    self._listen_task = None
+                
+                # Close the underlying connection
                 if self.client.connection:
                     await self.client.connection.close()
                     self.client.connection = None
+                
+                # Remove from global instances to allow garbage collection
+                if self.url in self._instances:
+                    print(f"[HUB] All subscribers gone for {self.url}. Purging Hub instance.")
+                    del self._instances[self.url]
 
     async def _distribute(self, message: str):
         """Internal callback that broadcasts received messages to all subscribers."""
-        # Work on a copy of subscribers in case one unsubscribes during iteration
-        current_subscribers = list(self.subscribers)
-        tasks = []
-        for callback in current_subscribers:
-            tasks.append(asyncio.create_task(callback(message)))
-        
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if not self.subscribers:
+            return
+
+        # Parse JSON once here to avoid redundant parsing in every subscriber
+        try:
+            data = json.loads(message)
+        except Exception as e:
+            print(f"[HUB ERROR] Failed to parse message from {self.url}: {e}")
+            return
+
+        # Directly gather the coroutines. gather() handles scheduling them efficiently.
+        tasks = [callback(data) for callback in list(self.subscribers)]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def send(self, data: dict):
         """Sends data through the shared connection (e.g., subscription requests)."""
