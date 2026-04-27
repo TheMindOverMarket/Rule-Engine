@@ -234,6 +234,23 @@ async def explain_deviation(payload: dict = Body(...)):
     # Offload LLM call to async thread to unblock fastApi loop
     reasoning = await asyncio.to_thread(reasoner.explain_deviation, playbook_text, event_data)
     
+    # NEW: Broadcast the update immediately so the UI feed can "live-hydrate"
+    from execution_engine import client_registry
+    
+    # We strip the "GENERATING..." tag and send the real meat
+    update_payload = {
+        **event_data,
+        "ai_reasoning": reasoning,
+    }
+    
+    # Ensure we preserve the identifiers for the frontend to match the row
+    user_id = event_data.get("user_id")
+    session_id = event_data.get("session_id")
+    
+    if user_id or session_id:
+        print(f" [AI BROADCAST] Sending reasoning update for event {event_data.get('order_id') or event_data.get('id')}")
+        await client_registry.broadcast(update_payload, user_id=user_id, session_id=session_id)
+
     return {"status": "success", "reasoning": reasoning}
 
 

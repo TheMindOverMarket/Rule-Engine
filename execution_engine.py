@@ -488,7 +488,7 @@ async def run_market_engine(
             )
             
             # 🚀 REAL-TIME AI REASONING STATUS 🚀
-            if output_payload.get('deviation'):
+            if output_payload.get('deviation') and output_payload.get('is_new_event'):
                 output_payload['ai_reasoning'] = "GENERATING..."
 
             evaluation_tick += 1
