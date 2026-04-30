@@ -79,13 +79,13 @@ To completely understand the inner workings, please read through the **[docs/ fo
 
 ## 🛠 Next Steps & Upgrades
 
-### WebSocket Multiplexing (In Progress)
+### WebSocket Multiplexing & Data
 - [x] **MarketDataHub**: Implemented singleton-per-URL multiplexer to share WebSocket connections across playbooks.
-- [ ] **User-Wide Streams**: Update backend `broadcast.py` to allow a "user-scope" stream, enabling the Hub to multiplex all a user's playbooks into one connection.
-- [ ] **Direct Provider Integration**: Transition the Hub to connect directly to Alpaca/Binance for lower latency, bypassing the backend for market data.
+- [x] **Session Streaming**: Live frontend streaming with `useRuleEngineEvents` handling WebSocket reconnects and multiplexing.
+- [ ] **Direct Provider Integration**: Transition the Hub to connect directly to Binance/Coinbase for global crypto liquidity, bypassing Alpaca's low-volume US crypto feed.
 
 ### Performance & Reliability
-- [ ] **Account Data Caching**: Implement a TTL cache (e.g. 5s) in `AlpacaAccountProvider` to stop redundant REST API calls to Alpaca on every tick.
-- [ ] **Auto-Reconnection**: Implement robust exponential backoff for `WebSocketClient` to handle network blips.
+- [x] **Account Data Caching**: Implemented a 5s TTL cache in `AlpacaAccountProvider` to prevent rate limiting from redundant REST API calls to Alpaca on every tick.
+- [x] **LLM Threading**: Decoupled LLM AI reasoner calls via `asyncio.to_thread` to prevent blocking the fast WebSocket trading loop.
+- [x] **Session State Persistence**: Automatically clears and hydrates sessions, handling deviation buffers and race conditions cleanly.
 - [ ] **Dynamic Rules**: Build a mechanism to dynamically deactivate individual rules as the trading session matures.
-- [ ] **Auth Security**: Implement token expiration and dynamic revocation for WebSocket authentication.
