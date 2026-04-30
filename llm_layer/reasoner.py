@@ -64,7 +64,8 @@ class DeviationReasoner:
             "A trader just took a manual action that triggered a DEVIATION "
             "from their established algorithmic playbook constraints or entry rules.\n\n"
             "Your job is to provide a brief 2-3 sentence markdown explanation of EXACTLY why this is a deviation. "
-            "Focus only on what rule they broke (e.g. they bought when price was not below VWAP) or what constraint they violated. "
+            "Focus ONLY on the specific rules they broke (which are listed in the `deviation_true` array). "
+            "Do NOT mention or hallucinate violations for rules that they successfully followed (which are listed in the `deviation_false` array). "
             "Do NOT provide trading advice. Keep it entirely objective and extremely concise."
         )
 
@@ -75,7 +76,9 @@ class DeviationReasoner:
         # Market & Evaluation State During Action:
         {json.dumps(event_data, indent=2)}
 
-        Provide a very brief explanation of why this was marked as a deviation, reading from the `deviation_true` array which specifies the failing rules. Keep it to 2-3 sentences max.
+        Provide a very brief explanation of why this was marked as a deviation. 
+        CRITICAL INSTRUCTION: You MUST ONLY explain the rules listed in the `deviation_true` array. Do NOT state that the trader violated any rule listed in the `deviation_false` array, because those rules were evaluated as GREEN (adhered to).
+        Keep your explanation to 2-3 sentences max.
         """
 
         try:
